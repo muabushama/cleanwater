@@ -1,0 +1,916 @@
+<?php
+
+declare(strict_types=1);
+
+$configPath = __DIR__ . '/config.local.php';
+if (!file_exists($configPath)) {
+    http_response_code(500);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['error' => 'API config file is missing.']);
+    exit;
+}
+
+$config = require $configPath;
+
+date_default_timezone_set($config['timezone'] ?? 'UTC');
+
+$jsonFields = [
+    'customer_devices' => ['candles'],
+    'work_orders' => ['items', 'previous_visits'],
+];
+
+$defaultCandles = [
+    ['name' => 'الشمعة الأولى', 'type' => 'عادي درجة اولى', 'price' => 30, 'duration_months' => 3],
+    ['name' => 'الشمعة الثانية', 'type' => 'عادي درجة اولى', 'price' => 30, 'duration_months' => 6],
+    ['name' => 'الشمعة الثالثة', 'type' => 'عادي درجة اولى', 'price' => 30, 'duration_months' => 9],
+    ['name' => 'الشمعة الرابعة', 'type' => 'عادي درجة اولى', 'price' => 30, 'duration_months' => 24],
+    ['name' => 'الشمعة الخامسة', 'type' => 'عادي درجة اولى', 'price' => 30, 'duration_months' => 12],
+    ['name' => 'الشمعة السادسة', 'type' => 'عادي درجة اولى', 'price' => 30, 'duration_months' => 24],
+    ['name' => 'الشمعة السابعة', 'type' => 'عادي درجة اولى', 'price' => 30, 'duration_months' => 24],
+];
+
+$tableRules = [
+    'users' => ['authRequired' => false, 'select' => 'admin', 'insert' => 'admin', 'update' => 'admin', 'delete' => 'admin'],
+    'profiles' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'admin', 'update' => 'auth', 'delete' => 'admin'],
+    'user_roles' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'admin', 'update' => 'admin', 'delete' => 'admin'],
+    'customers' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'products' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'admin', 'update' => 'auth', 'delete' => 'admin'],
+    'customer_devices' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'candle_changes' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'installments' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'invoices' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'maintenance' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'work_orders' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'rep_locations' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'admin', 'delete' => 'admin'],
+    'system_settings' => ['authRequired' => true, 'select' => 'admin', 'insert' => 'admin', 'update' => 'admin', 'delete' => 'admin'],
+];
+
+$deleteAllOrder = [
+    'candle_changes',
+    'installments',
+    'invoices',
+    'maintenance',
+    'work_orders',
+    'customer_devices',
+    'customers',
+    'rep_locations',
+    'products',
+];
+
+$assignableRoles = ['admin', 'sales_rep', 'customer_service'];
+
+function sendJson(int $status, array $payload): void
+{
+    http_response_code($status);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
+function persistAuthCookie(?string $token): void
+{
+    $options = [
+        'expires' => $token === null ? time() - 3600 : time() + (7 * 24 * 60 * 60),
+        'path' => '/',
+        'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off',
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ];
+
+    setcookie('oasis_token', $token ?? '', $options);
+}
+
+function getAllowedOrigins(array $config): array
+{
+    $raw = (string)($config['client_origin'] ?? '');
+    $items = array_filter(array_map('trim', explode(',', $raw)));
+    return array_values($items);
+}
+
+function sendCorsHeaders(array $config): void
+{
+    $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+    $allowedOrigins = getAllowedOrigins($config);
+    if ($origin !== '' && (empty($allowedOrigins) || in_array($origin, $allowedOrigins, true))) {
+        header('Access-Control-Allow-Origin: ' . $origin);
+    }
+    header('Vary: Origin');
+    header('Access-Control-Allow-Headers: Authorization, Content-Type');
+    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+}
+
+function base64UrlEncode(string $value): string
+{
+    return rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
+}
+
+function base64UrlDecode(string $value): string
+{
+    $padding = strlen($value) % 4;
+    if ($padding > 0) {
+        $value .= str_repeat('=', 4 - $padding);
+    }
+    return base64_decode(strtr($value, '-_', '+/')) ?: '';
+}
+
+function generateUuid(): string
+{
+    $data = random_bytes(16);
+    $data[6] = chr((ord($data[6]) & 0x0f) | 0x40);
+    $data[8] = chr((ord($data[8]) & 0x3f) | 0x80);
+    return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
+}
+
+function makeToken(array $user, array $config): string
+{
+    $header = ['alg' => 'HS256', 'typ' => 'JWT'];
+    $payload = [
+        'sub' => $user['id'],
+        'email' => $user['email'],
+        'iat' => time(),
+        'exp' => time() + (7 * 24 * 60 * 60),
+    ];
+
+    $headerEncoded = base64UrlEncode(json_encode($header));
+    $payloadEncoded = base64UrlEncode(json_encode($payload));
+    $signature = hash_hmac('sha256', $headerEncoded . '.' . $payloadEncoded, $config['jwt_secret'], true);
+
+    return $headerEncoded . '.' . $payloadEncoded . '.' . base64UrlEncode($signature);
+}
+
+function verifyToken(string $token, array $config): ?array
+{
+    $parts = explode('.', $token);
+    if (count($parts) !== 3) {
+        return null;
+    }
+
+    [$headerEncoded, $payloadEncoded, $signatureEncoded] = $parts;
+    $expected = base64UrlEncode(hash_hmac('sha256', $headerEncoded . '.' . $payloadEncoded, $config['jwt_secret'], true));
+    if (!hash_equals($expected, $signatureEncoded)) {
+        return null;
+    }
+
+    $payload = json_decode(base64UrlDecode($payloadEncoded), true);
+    if (!is_array($payload)) {
+        return null;
+    }
+
+    if (($payload['exp'] ?? 0) < time()) {
+        return null;
+    }
+
+    return $payload;
+}
+
+function getBearerToken(): ?string
+{
+    $headersToCheck = [
+        $_SERVER['HTTP_AUTHORIZATION'] ?? null,
+        $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? null,
+        $_SERVER['Authorization'] ?? null,
+        $_SERVER['HTTP_X_AUTHORIZATION'] ?? null,
+    ];
+
+    if (function_exists('getallheaders')) {
+        $allHeaders = getallheaders();
+        foreach (['Authorization', 'authorization'] as $key) {
+            if (!empty($allHeaders[$key])) {
+                $headersToCheck[] = $allHeaders[$key];
+            }
+        }
+    }
+
+    if (function_exists('apache_request_headers')) {
+        $apacheHeaders = apache_request_headers();
+        foreach (['Authorization', 'authorization'] as $key) {
+            if (!empty($apacheHeaders[$key])) {
+                $headersToCheck[] = $apacheHeaders[$key];
+            }
+        }
+    }
+
+    foreach ($headersToCheck as $header) {
+        if (!is_string($header) || $header === '') {
+            continue;
+        }
+
+        if (preg_match('/Bearer\s+(.+)/i', $header, $matches) === 1) {
+            return trim($matches[1]);
+        }
+    }
+
+    if (!empty($_COOKIE['oasis_token']) && is_string($_COOKIE['oasis_token'])) {
+        return trim($_COOKIE['oasis_token']);
+    }
+
+    return null;
+}
+
+function db(array $config): PDO
+{
+    static $pdo = null;
+    if ($pdo instanceof PDO) {
+        return $pdo;
+    }
+
+    $dsn = sprintf('mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4', $config['db_host'], $config['db_port'], $config['db_name']);
+    $pdo = new PDO($dsn, $config['db_user'], $config['db_password'], [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
+
+    return $pdo;
+}
+
+function parseJsonBody(): array
+{
+    $raw = file_get_contents('php://input');
+    if ($raw === false || $raw === '') {
+        return [];
+    }
+
+    $decoded = json_decode($raw, true);
+    return is_array($decoded) ? $decoded : [];
+}
+
+function getCurrentUser(PDO $pdo, array $config): ?array
+{
+    $token = getBearerToken();
+    if ($token === null) {
+        return null;
+    }
+
+    $payload = verifyToken($token, $config);
+    if (!is_array($payload) || empty($payload['sub'])) {
+        return null;
+    }
+
+    return getUserWithProfile($pdo, (string)$payload['sub']);
+}
+
+function getUserRoles(PDO $pdo, string $userId): array
+{
+    $stmt = $pdo->prepare('SELECT role FROM user_roles WHERE user_id = ?');
+    $stmt->execute([$userId]);
+    return array_map(static fn(array $row): string => (string)$row['role'], $stmt->fetchAll());
+}
+
+function getUserWithProfile(PDO $pdo, string $userId): ?array
+{
+    $stmt = $pdo->prepare(
+        'SELECT u.id, u.email, u.is_active, u.created_at, p.full_name, p.phone, p.avatar_url, p.branch_id
+         FROM users u
+         LEFT JOIN profiles p ON p.id = u.id
+         WHERE u.id = ?
+         LIMIT 1'
+    );
+    $stmt->execute([$userId]);
+    $row = $stmt->fetch();
+
+    if (!$row) {
+        return null;
+    }
+
+    return [
+        'id' => $row['id'],
+        'email' => $row['email'],
+        'created_at' => $row['created_at'],
+        'is_active' => (bool)$row['is_active'],
+        'profile' => [
+            'full_name' => $row['full_name'] ?? '',
+            'phone' => $row['phone'] ?? '',
+            'avatar_url' => $row['avatar_url'] ?? '',
+            'branch_id' => $row['branch_id'] ?? '1',
+        ],
+        'roles' => getUserRoles($pdo, $row['id']),
+    ];
+}
+
+function isAdmin(?array $user): bool
+{
+    return is_array($user) && in_array('admin', $user['roles'] ?? [], true);
+}
+
+function requireAuth(?array $user): void
+{
+    if ($user === null) {
+        sendJson(401, ['error' => 'غير مصرح']);
+    }
+}
+
+function requireAdminRole(?array $user): void
+{
+    requireAuth($user);
+    if (!isAdmin($user)) {
+        sendJson(403, ['error' => 'صلاحيات المدير مطلوبة']);
+    }
+}
+
+function parseTableRow(string $table, array $row, array $jsonFields, array $defaultCandles): array
+{
+    foreach ($jsonFields[$table] ?? [] as $field) {
+        $value = $row[$field] ?? null;
+        if ($value === null || $value === '') {
+            $row[$field] = $field === 'candles' ? $defaultCandles : [];
+            continue;
+        }
+
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            $row[$field] = is_array($decoded) ? $decoded : ($field === 'candles' ? $defaultCandles : []);
+        }
+    }
+
+    return $row;
+}
+
+function stringifyTablePayload(string $table, array $payload, array $jsonFields, array $defaultCandles): array
+{
+    foreach ($jsonFields[$table] ?? [] as $field) {
+        if (array_key_exists($field, $payload)) {
+            $payload[$field] = json_encode($payload[$field] ?? ($field === 'candles' ? $defaultCandles : []), JSON_UNESCAPED_UNICODE);
+        }
+    }
+    return $payload;
+}
+
+function buildWhere(array $filters): array
+{
+    $clauses = [];
+    $params = [];
+
+    foreach ($filters as $filter) {
+        if (!is_array($filter) || empty($filter['field']) || empty($filter['operator'])) {
+            continue;
+        }
+
+        $field = '`' . str_replace('`', '', (string)$filter['field']) . '`';
+        $operator = (string)$filter['operator'];
+
+        if ($operator === 'eq') {
+            $clauses[] = $field . ' = ?';
+            $params[] = $filter['value'] ?? null;
+            continue;
+        }
+
+        if ($operator === 'in') {
+            $values = is_array($filter['value'] ?? null) ? $filter['value'] : [];
+            if ($values === []) {
+                $clauses[] = '1 = 0';
+            } else {
+                $clauses[] = $field . ' IN (' . implode(', ', array_fill(0, count($values), '?')) . ')';
+                foreach ($values as $value) {
+                    $params[] = $value;
+                }
+            }
+            continue;
+        }
+
+        if ($operator === 'not' && ($filter['comparator'] ?? '') === 'is') {
+            if (($filter['value'] ?? null) === null) {
+                $clauses[] = $field . ' IS NOT NULL';
+            } else {
+                $clauses[] = $field . ' <> ?';
+                $params[] = $filter['value'];
+            }
+        }
+    }
+
+    return [
+        'sql' => $clauses === [] ? '' : ' WHERE ' . implode(' AND ', $clauses),
+        'params' => $params,
+    ];
+}
+
+function normalizeInsertRow(string $table, array $row, ?array $user, array $defaultCandles): array
+{
+    if (!isset($row['id']) || $row['id'] === '') {
+        $row['id'] = generateUuid();
+    }
+
+    if (array_key_exists('created_by', $row) && ($row['created_by'] === null || $row['created_by'] === '') && $user !== null) {
+        $row['created_by'] = $user['id'];
+    }
+
+    if ($table === 'customer_devices' && !array_key_exists('candles', $row)) {
+        $row['candles'] = $defaultCandles;
+    }
+
+    if ($table === 'work_orders') {
+        if (!array_key_exists('items', $row)) {
+            $row['items'] = [];
+        }
+        if (!array_key_exists('previous_visits', $row)) {
+            $row['previous_visits'] = [];
+        }
+    }
+
+    return $row;
+}
+
+function validateMutation(string $table, array $row, ?array $user): void
+{
+    if ($table === 'rep_locations' && !isAdmin($user) && (($row['user_id'] ?? '') !== ($user['id'] ?? ''))) {
+        sendJson(403, ['data' => null, 'error' => ['message' => 'غير مسموح بتسجيل موقع لمستخدم آخر']]);
+    }
+
+    if ($table === 'profiles' && !isAdmin($user) && isset($row['id']) && $row['id'] !== ($user['id'] ?? '')) {
+        sendJson(403, ['data' => null, 'error' => ['message' => 'غير مسموح بتعديل ملف مستخدم آخر']]);
+    }
+}
+
+function createInstallments(PDO $pdo, array $deviceRow): void
+{
+    if (($deviceRow['contract_type'] ?? '') !== 'تقسيط') {
+        return;
+    }
+
+    $count = (int)($deviceRow['installments_count'] ?? 0);
+    $amount = (float)($deviceRow['installment_amount'] ?? 0);
+    if ($count <= 0 || $amount <= 0) {
+        return;
+    }
+
+    $startDate = !empty($deviceRow['first_installment_date']) ? new DateTime((string)$deviceRow['first_installment_date']) : new DateTime();
+    $stmt = $pdo->prepare(
+        'INSERT INTO installments (id, customer_id, device_id, installment_date, amount, status)
+         VALUES (?, ?, ?, ?, ?, ?)'
+    );
+
+    for ($index = 0; $index < $count; $index++) {
+        $nextDate = clone $startDate;
+        if ($index > 0) {
+            $nextDate->modify('+' . $index . ' month');
+        }
+
+        $stmt->execute([
+            generateUuid(),
+            $deviceRow['customer_id'],
+            $deviceRow['id'],
+            $nextDate->format('Y-m-d'),
+            $amount,
+            'معلق',
+        ]);
+    }
+}
+
+function createUser(PDO $pdo, string $email, string $password, string $fullName, string $branchId, string $phone, array $roles): array
+{
+    $userId = generateUuid();
+    $passwordHash = password_hash($password, PASSWORD_BCRYPT);
+
+    $pdo->beginTransaction();
+    try {
+        $stmt = $pdo->prepare('INSERT INTO users (id, email, password_hash, is_active) VALUES (?, ?, ?, 1)');
+        $stmt->execute([$userId, strtolower($email), $passwordHash]);
+
+        $stmt = $pdo->prepare('INSERT INTO profiles (id, full_name, phone, branch_id) VALUES (?, ?, ?, ?)');
+        $stmt->execute([$userId, $fullName, $phone, $branchId]);
+
+        $stmt = $pdo->prepare('INSERT INTO user_roles (id, user_id, role) VALUES (?, ?, ?)');
+        foreach ($roles as $role) {
+            $stmt->execute([generateUuid(), $userId, $role]);
+        }
+
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+
+    $user = getUserWithProfile($pdo, $userId);
+    if ($user === null) {
+        throw new RuntimeException('Unable to load created user.');
+    }
+
+    return $user;
+}
+
+function upsertSetting(PDO $pdo, string $key, string $value): void
+{
+    $stmt = $pdo->prepare(
+        'INSERT INTO system_settings (`key`, `value`) VALUES (?, ?)
+         ON DUPLICATE KEY UPDATE `value` = VALUES(`value`), updated_at = CURRENT_TIMESTAMP'
+    );
+    $stmt->execute([$key, $value]);
+}
+
+sendCorsHeaders($config);
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'OPTIONS') {
+    sendJson(200, ['ok' => true]);
+}
+
+$pdo = db($config);
+$user = getCurrentUser($pdo, $config);
+$requestPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+$path = '/' . ltrim($requestPath, '/');
+$segments = array_values(array_filter(explode('/', trim($path, '/'))));
+$method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+$body = parseJsonBody();
+
+try {
+    if ($segments === ['api', 'health']) {
+        $pdo->query('SELECT 1');
+        sendJson(200, ['ok' => true]);
+    }
+
+    if ($segments === ['api', 'auth', 'setup-status'] && $method === 'GET') {
+        $count = (int)$pdo->query("SELECT COUNT(*) FROM user_roles WHERE role = 'admin'")->fetchColumn();
+        sendJson(200, ['needsSetup' => $count === 0]);
+    }
+
+    if ($segments === ['api', 'auth', 'setup-admin'] && $method === 'POST') {
+        $count = (int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
+        if ($count > 0) {
+            sendJson(400, ['error' => 'تم إعداد النظام بالفعل']);
+        }
+
+        $email = trim((string)($body['email'] ?? ''));
+        $password = (string)($body['password'] ?? '');
+        $fullName = trim((string)($body['full_name'] ?? ''));
+        $branchId = (string)($body['branch_id'] ?? '1');
+        if ($email === '' || $password === '' || $fullName === '') {
+            sendJson(400, ['error' => 'البيانات المطلوبة غير مكتملة']);
+        }
+
+        $newUser = createUser($pdo, $email, $password, $fullName, $branchId, '', ['admin']);
+        upsertSetting($pdo, 'delete_password', $password);
+        $token = makeToken($newUser, $config);
+        persistAuthCookie($token);
+        sendJson(200, ['token' => $token, 'user' => $newUser]);
+    }
+
+    if ($segments === ['api', 'auth', 'signup'] && $method === 'POST') {
+        $email = trim((string)($body['email'] ?? ''));
+        $password = (string)($body['password'] ?? '');
+        $fullName = trim((string)($body['options']['data']['full_name'] ?? ''));
+        $branchId = (string)($body['options']['data']['branch_id'] ?? '1');
+        $phone = trim((string)($body['options']['data']['phone'] ?? ''));
+        $role = (string)($body['options']['data']['role'] ?? 'customer_service');
+        if (!in_array($role, $assignableRoles, true)) {
+            $role = 'customer_service';
+        }
+        if ($email === '' || $password === '') {
+            sendJson(400, ['error' => 'البيانات المطلوبة غير مكتملة']);
+        }
+
+        $newUser = createUser($pdo, $email, $password, $fullName, $branchId, $phone, [$role]);
+        if ($role === 'admin') {
+            upsertSetting($pdo, 'delete_password', $password);
+        }
+        $token = makeToken($newUser, $config);
+        persistAuthCookie($token);
+        sendJson(200, ['token' => $token, 'user' => $newUser]);
+    }
+
+    if ($segments === ['api', 'auth', 'login'] && $method === 'POST') {
+        $email = strtolower(trim((string)($body['email'] ?? '')));
+        $password = (string)($body['password'] ?? '');
+        if ($email === '' || $password === '') {
+            sendJson(400, ['error' => 'البريد الإلكتروني وكلمة المرور مطلوبان']);
+        }
+
+        $stmt = $pdo->prepare('SELECT id, email, password_hash FROM users WHERE email = ? LIMIT 1');
+        $stmt->execute([$email]);
+        $account = $stmt->fetch();
+        if (!$account || !password_verify($password, (string)$account['password_hash'])) {
+            sendJson(401, ['error' => 'بيانات الدخول غير صحيحة']);
+        }
+
+        $currentUser = getUserWithProfile($pdo, (string)$account['id']);
+        if ($currentUser === null) {
+            sendJson(401, ['error' => 'بيانات الدخول غير صحيحة']);
+        }
+
+        $token = makeToken($currentUser, $config);
+        persistAuthCookie($token);
+        sendJson(200, ['token' => $token, 'user' => $currentUser]);
+    }
+
+    if ($segments === ['api', 'auth', 'me'] && $method === 'GET') {
+        requireAuth($user);
+        sendJson(200, ['user' => $user]);
+    }
+
+    if ($segments === ['api', 'auth', 'logout'] && $method === 'POST') {
+        requireAuth($user);
+        persistAuthCookie(null);
+        sendJson(200, ['success' => true]);
+    }
+
+    if ($segments === ['api', 'auth', 'create-rep'] && $method === 'POST') {
+        requireAdminRole($user);
+
+        $email = trim((string)($body['email'] ?? ''));
+        $password = (string)($body['password'] ?? '');
+        $fullName = trim((string)($body['full_name'] ?? ''));
+        $branchId = (string)($body['branch_id'] ?? '1');
+        $phone = trim((string)($body['phone'] ?? ''));
+
+        if ($email === '' || $password === '' || $fullName === '') {
+            sendJson(400, ['error' => 'البيانات المطلوبة غير مكتملة']);
+        }
+
+        $newUser = createUser($pdo, $email, $password, $fullName, $branchId, $phone, ['sales_rep']);
+        sendJson(200, ['success' => true, 'user' => $newUser]);
+    }
+
+    if ($segments === ['api', 'auth', 'change-password'] && $method === 'POST') {
+        requireAuth($user);
+
+        $currentPassword = (string)($body['currentPassword'] ?? '');
+        $newPassword = (string)($body['newPassword'] ?? '');
+        if ($currentPassword === '' || $newPassword === '') {
+            sendJson(400, ['error' => 'كلمتا المرور مطلوبة']);
+        }
+
+        $stmt = $pdo->prepare('SELECT password_hash FROM users WHERE id = ? LIMIT 1');
+        $stmt->execute([$user['id']]);
+        $hash = (string)$stmt->fetchColumn();
+        if ($hash === '' || !password_verify($currentPassword, $hash)) {
+            sendJson(400, ['error' => 'كلمة المرور الحالية غير صحيحة']);
+        }
+
+        $stmt = $pdo->prepare('UPDATE users SET password_hash = ? WHERE id = ?');
+        $stmt->execute([password_hash($newPassword, PASSWORD_BCRYPT), $user['id']]);
+        sendJson(200, ['success' => true]);
+    }
+
+    if (count($segments) === 3 && $segments[0] === 'api' && $segments[1] === 'functions' && $method === 'POST') {
+        requireAdminRole($user);
+        $functionName = $segments[2];
+
+        if ($functionName === 'manage-users') {
+            if (($body['action'] ?? '') !== 'create_rep') {
+                sendJson(400, ['error' => 'Invalid action']);
+            }
+
+            $newUser = createUser(
+                $pdo,
+                trim((string)($body['email'] ?? '')),
+                (string)($body['password'] ?? ''),
+                trim((string)($body['full_name'] ?? '')),
+                (string)($body['branch_id'] ?? '1'),
+                trim((string)($body['phone'] ?? '')),
+                ['sales_rep']
+            );
+
+            sendJson(200, ['success' => true, 'user' => $newUser]);
+        }
+
+        if ($functionName === 'manage-backup') {
+            $action = (string)($body['action'] ?? '');
+
+            if ($action === 'export') {
+                $tables = ['customers', 'customer_devices', 'candle_changes', 'installments', 'invoices', 'maintenance', 'products', 'work_orders', 'profiles', 'rep_locations', 'user_roles'];
+                $exportData = [];
+                $totalRecords = 0;
+
+                foreach ($tables as $table) {
+                    $rows = $pdo->query('SELECT * FROM `' . $table . '`')->fetchAll();
+                    $parsedRows = array_map(
+                        static fn(array $row): array => parseTableRow($table, $row, $GLOBALS['jsonFields'], $GLOBALS['defaultCandles']),
+                        $rows
+                    );
+                    $exportData[$table] = $parsedRows;
+                    $totalRecords += count($parsedRows);
+                }
+
+                sendJson(200, [
+                    'data' => $exportData,
+                    'exported_at' => gmdate('c'),
+                    'exported_by' => $user['email'],
+                    'total_records' => $totalRecords,
+                ]);
+            }
+
+            if ($action === 'delete-all') {
+                $password = (string)($body['password'] ?? '');
+                if ($password === '') {
+                    sendJson(400, ['error' => 'كلمة السر مطلوبة']);
+                }
+
+                $stmt = $pdo->prepare("SELECT `value` FROM system_settings WHERE `key` = 'delete_password' LIMIT 1");
+                $stmt->execute();
+                $savedPassword = (string)$stmt->fetchColumn();
+                if ($savedPassword !== $password) {
+                    sendJson(400, ['error' => 'كلمة السر غير صحيحة']);
+                }
+
+                foreach ($deleteAllOrder as $table) {
+                    $pdo->exec('DELETE FROM `' . $table . '`');
+                }
+
+                sendJson(200, ['success' => true, 'message' => 'تم مسح جميع البيانات بنجاح']);
+            }
+
+            if ($action === 'change-password') {
+                $password = (string)($body['password'] ?? '');
+                $newPassword = (string)($body['newPassword'] ?? '');
+                if ($password === '' || $newPassword === '') {
+                    sendJson(400, ['error' => 'كلمة السر الحالية والجديدة مطلوبة']);
+                }
+
+                $stmt = $pdo->prepare("SELECT `value` FROM system_settings WHERE `key` = 'delete_password' LIMIT 1");
+                $stmt->execute();
+                $savedPassword = (string)$stmt->fetchColumn();
+                if ($savedPassword !== $password) {
+                    sendJson(400, ['error' => 'كلمة السر الحالية غير صحيحة']);
+                }
+
+                upsertSetting($pdo, 'delete_password', $newPassword);
+                sendJson(200, ['success' => true, 'message' => 'تم تغيير كلمة السر بنجاح']);
+            }
+
+            sendJson(400, ['error' => 'Invalid action']);
+        }
+    }
+
+    if (count($segments) === 4 && $segments[0] === 'api' && $segments[1] === 'query' && $method === 'POST') {
+        $table = $segments[2];
+        $action = $segments[3];
+        if (!isset($tableRules[$table])) {
+            sendJson(404, ['data' => null, 'error' => ['message' => 'جدول غير مدعوم']]);
+        }
+
+        $rule = $tableRules[$table];
+        if (($rule['authRequired'] ?? false) === true) {
+            requireAuth($user);
+        }
+
+        if (($rule[$action] ?? '') === 'admin') {
+            requireAdminRole($user);
+        }
+
+        if ($action === 'select') {
+            $columns = (string)($body['columns'] ?? '*');
+            $filters = is_array($body['filters'] ?? null) ? $body['filters'] : [];
+            $order = is_array($body['order'] ?? null) ? $body['order'] : null;
+            $limit = (int)($body['limit'] ?? 0);
+            $where = buildWhere($filters);
+
+            if ($table === 'rep_locations' && str_contains($columns, 'profiles:user_id(full_name)')) {
+                $sql = 'SELECT rep_locations.*, profiles.full_name AS profile_full_name FROM rep_locations LEFT JOIN profiles ON profiles.id = rep_locations.user_id';
+            } else {
+                $sql = 'SELECT * FROM `' . $table . '`';
+            }
+
+            $sql .= $where['sql'];
+            if (is_array($order) && !empty($order['field'])) {
+                $field = '`' . str_replace('`', '', (string)$order['field']) . '`';
+                $direction = (($order['ascending'] ?? true) === false) ? 'DESC' : 'ASC';
+                $sql .= ' ORDER BY ' . $field . ' ' . $direction;
+            }
+            if ($limit > 0) {
+                $sql .= ' LIMIT ' . $limit;
+            }
+
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($where['params']);
+            $rows = $stmt->fetchAll();
+
+            $parsed = [];
+            foreach ($rows as $row) {
+                $nextRow = parseTableRow($table, $row, $jsonFields, $defaultCandles);
+                if ($table === 'rep_locations' && array_key_exists('profile_full_name', $nextRow)) {
+                    $nextRow['profiles'] = $nextRow['profile_full_name'] !== null ? ['full_name' => $nextRow['profile_full_name']] : null;
+                    unset($nextRow['profile_full_name']);
+                }
+                $parsed[] = $nextRow;
+            }
+
+            sendJson(200, ['data' => $parsed, 'error' => null]);
+        }
+
+        if ($action === 'insert') {
+            $rows = $body['values'] ?? [];
+            if (!is_array($rows) || array_keys($rows) !== range(0, count($rows) - 1)) {
+                $rows = [$rows];
+            }
+
+            if ($rows === []) {
+                sendJson(400, ['data' => null, 'error' => ['message' => 'No rows provided']]);
+            }
+
+            $pdo->beginTransaction();
+            try {
+                $resultRows = [];
+                foreach ($rows as $row) {
+                    if (!is_array($row)) {
+                        continue;
+                    }
+                    $row = normalizeInsertRow($table, $row, $user, $defaultCandles);
+                    validateMutation($table, $row, $user);
+                    $row = stringifyTablePayload($table, $row, $jsonFields, $defaultCandles);
+                    $columns = array_keys($row);
+                    $placeholders = implode(', ', array_fill(0, count($columns), '?'));
+                    $sql = 'INSERT INTO `' . $table . '` (' . implode(', ', array_map(static fn(string $col): string => '`' . $col . '`', $columns)) . ') VALUES (' . $placeholders . ')';
+                    $stmt = $pdo->prepare($sql);
+                    $stmt->execute(array_values($row));
+                    if ($table === 'customer_devices') {
+                        createInstallments($pdo, $row);
+                    }
+                    $resultRows[] = parseTableRow($table, $row, $jsonFields, $defaultCandles);
+                }
+                $pdo->commit();
+                sendJson(200, ['data' => $resultRows, 'error' => null]);
+            } catch (Throwable $e) {
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                sendJson(400, ['data' => null, 'error' => ['message' => $e->getMessage()]]);
+            }
+        }
+
+        if ($action === 'update') {
+            $values = is_array($body['values'] ?? null) ? $body['values'] : [];
+            validateMutation($table, $values, $user);
+            $values = stringifyTablePayload($table, $values, $jsonFields, $defaultCandles);
+            $fields = array_keys($values);
+            if ($fields === []) {
+                sendJson(400, ['data' => null, 'error' => ['message' => 'No values provided']]);
+            }
+
+            $where = buildWhere(is_array($body['filters'] ?? null) ? $body['filters'] : []);
+            $setClause = implode(', ', array_map(static fn(string $field): string => '`' . $field . '` = ?', $fields));
+            $sql = 'UPDATE `' . $table . '` SET ' . $setClause . $where['sql'];
+
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute(array_merge(array_values($values), $where['params']));
+
+            $selectStmt = $pdo->prepare('SELECT * FROM `' . $table . '`' . $where['sql']);
+            $selectStmt->execute($where['params']);
+            $rows = $selectStmt->fetchAll();
+            $parsedRows = array_map(
+                static fn(array $row): array => parseTableRow($table, $row, $GLOBALS['jsonFields'], $GLOBALS['defaultCandles']),
+                $rows
+            );
+
+            sendJson(200, ['data' => $parsedRows, 'error' => null]);
+        }
+
+        if ($action === 'delete') {
+            $where = buildWhere(is_array($body['filters'] ?? null) ? $body['filters'] : []);
+            if ($where['sql'] === '') {
+                sendJson(400, ['data' => null, 'error' => ['message' => 'Delete requires filters']]);
+            }
+
+            $stmt = $pdo->prepare('DELETE FROM `' . $table . '`' . $where['sql']);
+            $stmt->execute($where['params']);
+            sendJson(200, ['data' => [], 'error' => null]);
+        }
+
+        sendJson(404, ['data' => null, 'error' => ['message' => 'Action not supported']]);
+    }
+
+    if (count($segments) === 4 && $segments[0] === 'api' && $segments[1] === 'storage' && $segments[3] === 'upload' && $method === 'POST') {
+        requireAuth($user);
+
+        $bucket = preg_replace('/[^a-zA-Z0-9_-]/', '', $segments[2]);
+        if ($bucket === '') {
+            sendJson(400, ['data' => null, 'error' => ['message' => 'Invalid bucket']]);
+        }
+
+        if (!isset($_FILES['file']) || !is_array($_FILES['file'])) {
+            sendJson(400, ['data' => null, 'error' => ['message' => 'No file uploaded']]);
+        }
+
+        $uploadsRoot = realpath(__DIR__ . '/../uploads');
+        if ($uploadsRoot === false) {
+            $uploadsRoot = __DIR__ . '/../uploads';
+        }
+
+        $bucketDir = $uploadsRoot . DIRECTORY_SEPARATOR . $bucket;
+        if (!is_dir($bucketDir) && !mkdir($bucketDir, 0775, true) && !is_dir($bucketDir)) {
+            sendJson(500, ['data' => null, 'error' => ['message' => 'Unable to create upload directory']]);
+        }
+
+        $requestedPath = trim((string)($_POST['path'] ?? ''));
+        $extension = pathinfo($_FILES['file']['name'] ?? '', PATHINFO_EXTENSION);
+        $safeName = $requestedPath !== '' ? basename($requestedPath) : generateUuid() . ($extension !== '' ? '.' . $extension : '');
+        $targetPath = $bucketDir . DIRECTORY_SEPARATOR . $safeName;
+
+        if (!move_uploaded_file($_FILES['file']['tmp_name'], $targetPath)) {
+            sendJson(500, ['data' => null, 'error' => ['message' => 'Unable to store file']]);
+        }
+
+        $publicBaseUrl = rtrim((string)$config['public_base_url'], '/');
+        $publicUrl = $publicBaseUrl . '/uploads/' . $bucket . '/' . rawurlencode($safeName);
+
+        sendJson(200, [
+            'data' => [
+                'path' => $safeName,
+                'fullPath' => $bucket . '/' . $safeName,
+                'publicUrl' => $publicUrl,
+            ],
+            'error' => null,
+        ]);
+    }
+
+    sendJson(404, ['error' => 'Not found']);
+} catch (Throwable $e) {
+    sendJson(500, ['error' => $e->getMessage()]);
+}
