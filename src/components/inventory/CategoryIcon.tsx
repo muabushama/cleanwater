@@ -1,4 +1,4 @@
-import { Filter, Droplets, Package, Wrench, Layers } from 'lucide-react';
+import { Filter, Droplets, Package, Wrench, Layers, Beaker, Truck } from 'lucide-react';
 
 const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   home_filters: Filter,
@@ -6,6 +6,10 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   regular: Filter,
   spare_parts: Package,
   desalination: Droplets,
+  supplies: Beaker,
+  tools: Wrench,
+  technician: Truck,
+  station: Layers,
   default: Package,
   filter: Filter,
   droplets: Droplets,

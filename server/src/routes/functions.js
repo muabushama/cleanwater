@@ -9,23 +9,55 @@ const router = express.Router();
 router.post("/manage-users", requireAdmin, async (req, res) => {
   const { action, email, password, full_name, branch_id, phone } = req.body || {};
 
-  if (action !== "create_rep") {
-    return res.status(400).json({ error: "Invalid action" });
+  if (action === "create_rep") {
+    try {
+      const user = await createUser({
+        email,
+        password,
+        fullName: full_name,
+        branchId: branch_id || "1",
+        phone: phone || "",
+        roles: ["sales_rep"],
+      });
+      return res.json({ success: true, user });
+    } catch (error) {
+      return res.status(400).json({ error: error.message || "تعذر إنشاء المندوب" });
+    }
   }
 
-  try {
-    const user = await createUser({
-      email,
-      password,
-      fullName: full_name,
-      branchId: branch_id || "1",
-      phone: phone || "",
-      roles: ["sales_rep"],
-    });
-    return res.json({ success: true, user });
-  } catch (error) {
-    return res.status(400).json({ error: error.message || "تعذر إنشاء المندوب" });
+  if (action === "create_warehouse_keeper") {
+    try {
+      const user = await createUser({
+        email,
+        password,
+        fullName: full_name,
+        branchId: branch_id || "1",
+        phone: phone || "",
+        roles: ["warehouse_keeper"],
+      });
+      return res.json({ success: true, user });
+    } catch (error) {
+      return res.status(400).json({ error: error.message || "تعذر إنشاء أمين المخزن" });
+    }
   }
+
+  if (action === "create_customer_service") {
+    try {
+      const user = await createUser({
+        email,
+        password,
+        fullName: full_name,
+        branchId: branch_id || "1",
+        phone: phone || "",
+        roles: ["customer_service"],
+      });
+      return res.json({ success: true, user });
+    } catch (error) {
+      return res.status(400).json({ error: error.message || "تعذر إنشاء حساب خدمة العملاء" });
+    }
+  }
+
+  return res.status(400).json({ error: "Invalid action" });
 });
 
 router.post("/manage-backup", requireAdmin, async (req, res) => {

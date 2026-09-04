@@ -24,9 +24,11 @@ interface TopBarProps {
   userName?: string;
   onSignOut?: () => Promise<{ error: any }>;
   isRep?: boolean;
+  /** If false, user cannot switch branch (data is locked to profile branch). */
+  allowBranchSwitch?: boolean;
 }
 
-export function TopBar({ currentBranch, onBranchChange, userName, onSignOut, isRep }: TopBarProps) {
+export function TopBar({ currentBranch, onBranchChange, userName, onSignOut, isRep, allowBranchSwitch = true }: TopBarProps) {
   const [isDark, setIsDark] = useState(false);
   const currentBranchData = branches.find(b => b.id === currentBranch);
   const unreadCount = notifications.filter(n => !n.read).length;
@@ -53,7 +55,7 @@ export function TopBar({ currentBranch, onBranchChange, userName, onSignOut, isR
     <header className="h-14 border-b bg-card flex items-center justify-between px-4 card-shadow">
       <div className="flex items-center gap-3">
         {!isRep && <SidebarTrigger className="text-muted-foreground hover:text-foreground" />}
-        {!isRep && (
+        {!isRep && allowBranchSwitch && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" className="gap-2">
@@ -69,6 +71,11 @@ export function TopBar({ currentBranch, onBranchChange, userName, onSignOut, isR
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+        )}
+        {!isRep && !allowBranchSwitch && (
+          <span className="text-sm font-medium text-muted-foreground border rounded-md px-3 py-1.5 bg-muted/40">
+            {currentBranchData?.name ?? 'الفرع'}
+          </span>
         )}
         {isRep && (
           <span className="text-sm font-bold text-primary">أوردرات التوصيل</span>

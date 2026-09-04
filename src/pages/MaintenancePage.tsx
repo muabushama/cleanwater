@@ -3,15 +3,18 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useUserBranch } from '@/hooks/useUserBranch';
+import { branchDbValuesForUiBranch, canonicalBranchForSave } from '@/lib/branchFilters';
 import { maintenanceSchedule as demoMaintenance } from '@/data/demo-data';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Plus, Wrench, Calendar, Phone, DollarSign, StickyNote, User, X, Edit, Users, ClipboardList, Package } from 'lucide-react';
+import { Plus, Wrench, Calendar, Phone, DollarSign, StickyNote, User, X, Edit, Users, ClipboardList, Package, Trash2 } from 'lucide-react';
 import { AddDialog } from '@/components/AddDialog';
 import { useToast } from '@/hooks/use-toast';
+import { promptDeletePassword } from '@/lib/deletePassword';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { formatDateDayMonthYear } from '@/lib/dateDisplay';
 
 interface Maintenance {
   id: string;
@@ -63,6 +66,7 @@ const mapDemoToMaintenance = (): Maintenance[] =>
 
 interface MaintenancePageProps { embedded?: boolean }
 export default function MaintenancePage({ embedded }: MaintenancePageProps) {
+  const formatDateDisplay = (value?: string) => formatDateDayMonthYear(value);
   const [items, setItems] = useState<Maintenance[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('all');
@@ -77,7 +81,8 @@ export default function MaintenancePage({ embedded }: MaintenancePageProps) {
 
   const fetchMaintenance = async () => {
     setLoading(true);
-    const { data } = await supabase.from('maintenance').select('*').eq('branch', branch).order('next_date', { ascending: true });
+    const bv = branchDbValuesForUiBranch(branch);
+    const { data } = await supabase.from('maintenance').select('*').in('branch', bv).order('next_date', { ascending: true });
     if (data && data.length > 0) {
       setItems(data as Maintenance[]);
     } else {
@@ -109,12 +114,19 @@ export default function MaintenancePage({ embedded }: MaintenancePageProps) {
         notes: values.notes || '',
         cost: values.cost ? Number(values.cost) : 0,
         phone: values.phone || '',
-        branch,
+        branch: canonicalBranchForSave(branch),
         created_by: user?.id,
       }).select('id').single();
       if (error) throw error;
 
-      const { data: cust } = await supabase.from('customers').select('address, region').eq('name', values.customer_name).eq('branch', branch).limit(1).single();
+      const bv = branchDbValuesForUiBranch(branch);
+      const { data: cust } = await supabase
+        .from('customers')
+        .select('address, region')
+        .eq('name', values.customer_name)
+        .in('branch', bv)
+        .limit(1)
+        .single();
       const cost = values.cost ? Number(values.cost) : 0;
       await supabase.from('work_orders').insert({
         order_code: `صيانة-${values.next_date}-${maintData?.id?.slice(-6) || Date.now()}`,
@@ -125,7 +137,7 @@ export default function MaintenancePage({ embedded }: MaintenancePageProps) {
         product_name: values.product_name,
         visit_date: values.next_date,
         technician: values.technician || '',
-        branch,
+        branch: canonicalBranchForSave(branch),
         status: 'pending',
         items: cost > 0 ? [{ description: values.type || 'تغيير شمعات', value: cost }] : [],
         transport_cost: 0,
@@ -188,6 +200,25 @@ export default function MaintenancePage({ embedded }: MaintenancePageProps) {
     setEditingItem(m);
     setEditOpen(true);
     setSelectedItem(null);
+  };
+
+  const handleDeleteMaintenance = async (m: Maintenance, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (isDemoItem(m.id)) {
+      toast({ title: 'بيانات تجريبية', description: 'لا يمكن حذف البيانات التجريبية', variant: 'destructive' });
+      return;
+    }
+    if (!confirm(`حذف صيانة ${m.customer_name} — ${m.product_name}؟`)) return;
+    if (!promptDeletePassword()) return;
+    try {
+      const { error } = await supabase.from('maintenance').delete().eq('id', m.id);
+      if (error) throw error;
+      toast({ title: 'تم حذف سجل الصيانة' });
+      setSelectedItem(null);
+      await fetchMaintenance();
+    } catch (err: any) {
+      toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
+    }
   };
 
   const editInitialValues = useMemo(() => {
@@ -267,15 +298,20 @@ export default function MaintenancePage({ embedded }: MaintenancePageProps) {
                               {statusLabel(m.status)}
                             </Badge>
                             {!isDemoItem(m.id) && (
-                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => openEdit(m, e)}>
-                                <Edit className="h-3.5 w-3.5" />
-                              </Button>
+                              <>
+                                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => openEdit(m, e)}>
+                                  <Edit className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => handleDeleteMaintenance(m, e)}>
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </>
                             )}
                           </div>
                         </div>
                         <div className="flex items-center gap-3 text-xs text-muted-foreground">
                           <span className="flex items-center gap-1"><Wrench className="h-3 w-3" /> {m.type}</span>
-                          <span className="flex items-center gap-1"><Calendar className="h-3 w-3" /> {m.next_date}</span>
+                          <span className="flex items-center gap-1"><Calendar className="h-3 w-3" /> {formatDateDisplay(m.next_date)}</span>
                         </div>
                         <div className="flex justify-between text-xs">
                           <span>الفني: <span className="font-medium">{m.technician || '—'}</span></span>
@@ -283,6 +319,11 @@ export default function MaintenancePage({ embedded }: MaintenancePageProps) {
                             <span className="font-bold text-primary">{Number(m.cost).toLocaleString()} ج.م</span>
                           )}
                         </div>
+                        {m.notes && (
+                          <p className="text-[11px] text-muted-foreground line-clamp-2 bg-muted/30 rounded px-2 py-1">
+                            ملاحظات: {m.notes}
+                          </p>
+                        )}
                       </CardContent>
                     </Card>
                   </motion.div>
@@ -315,7 +356,7 @@ export default function MaintenancePage({ embedded }: MaintenancePageProps) {
                 <DetailRow icon={<Phone className="h-4 w-4" />} label="التليفون" value={selectedItem.phone || '—'} isPhone />
                 <DetailRow icon={<Wrench className="h-4 w-4" />} label="المنتج" value={selectedItem.product_name} />
                 <DetailRow icon={<Wrench className="h-4 w-4" />} label="نوع الصيانة" value={selectedItem.type} />
-                <DetailRow icon={<Calendar className="h-4 w-4" />} label="التاريخ" value={selectedItem.next_date} />
+                <DetailRow icon={<Calendar className="h-4 w-4" />} label="التاريخ" value={formatDateDisplay(selectedItem.next_date)} />
                 <DetailRow icon={<User className="h-4 w-4" />} label="الفني" value={selectedItem.technician || '—'} />
                 <DetailRow icon={<DollarSign className="h-4 w-4" />} label="التكلفة" value={`${Number(selectedItem.cost || 0).toLocaleString()} ج.م`} />
                 <div className="flex items-center gap-2">
@@ -336,9 +377,14 @@ export default function MaintenancePage({ embedded }: MaintenancePageProps) {
               )}
               <div className="border-t pt-3 flex flex-wrap gap-2">
                 {!isDemoItem(selectedItem.id) && (
-                  <Button size="sm" variant="outline" className="gap-1.5" onClick={() => openEdit(selectedItem)}>
-                    <Edit className="h-3.5 w-3.5" /> تعديل الصيانة
-                  </Button>
+                  <>
+                    <Button size="sm" variant="outline" className="gap-1.5" onClick={() => openEdit(selectedItem)}>
+                      <Edit className="h-3.5 w-3.5" /> تعديل الصيانة
+                    </Button>
+                    <Button size="sm" variant="outline" className="gap-1.5 text-destructive border-destructive/30 hover:bg-destructive/10" onClick={() => handleDeleteMaintenance(selectedItem)}>
+                      <Trash2 className="h-3.5 w-3.5" /> حذف
+                    </Button>
+                  </>
                 )}
                 <Button size="sm" variant="outline" className="gap-1.5" onClick={() => { setSelectedItem(null); navigate('/customers'); }}>
                   <Users className="h-3.5 w-3.5" /> العملاء

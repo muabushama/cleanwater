@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { supabase } from '@/integrations/supabase/client';
 import { useUserBranch } from '@/hooks/useUserBranch';
+import { branchDbValuesForUiBranch } from '@/lib/branchFilters';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,6 +13,16 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { formatEGP, companyInfo } from '@/data/demo-data';
+import { invoiceDebtRemaining } from '@/lib/invoiceBalance';
+import { promptDeletePassword } from '@/lib/deletePassword';
+import { workOrderPhonesForPrint } from '@/lib/workOrderPrintPhones';
+import {
+  getMaintenanceIntervalMonths,
+  getNextMaintenanceDate,
+  getNextMaintenanceDateStr,
+  hasFutureMaintenanceVisit,
+  maintenanceVisitStatus,
+} from '@/lib/maintenanceSchedule';
 import logo from '@/assets/logo.png';
 import {
   Search, Phone, MapPin, Monitor, Wrench, CreditCard,
@@ -38,6 +49,7 @@ interface CustomerDevice {
   branch: string;
   customer_code: string;
   notes: string;
+  contract_installment_interval_months?: number;
 }
 
 interface Customer {
@@ -74,10 +86,18 @@ interface CandleChange {
   status: string;
 }
 
-type VisitFilter = 'all' | 'maintenance' | 'installment' | 'breakdown' | 'overdue';
+type VisitFilter = 'all' | 'maintenance' | 'work_order' | 'installment' | 'breakdown' | 'overdue';
 
 interface VisitsPageProps { embedded?: boolean }
 export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
+  const formatDateDisplay = (v?: string) => {
+    const raw = String(v || '').trim();
+    if (!raw) return '-';
+    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+    return raw;
+  };
+
   const { toast } = useToast();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [devices, setDevices] = useState<CustomerDevice[]>([]);
@@ -87,6 +107,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
   const [candleChanges, setCandleChanges] = useState<CandleChange[]>([]);
   const [maintenanceRecords, setMaintenanceRecords] = useState<any[]>([]);
   const [workOrders, setWorkOrders] = useState<any[]>([]);
+  const [lastCandleChangeByDevice, setLastCandleChangeByDevice] = useState<Record<string, string>>({});
   const [installments, setInstallments] = useState<any[]>([]);
   const [visitFilter, setVisitFilter] = useState<VisitFilter>('all');
   const [loading, setLoading] = useState(true);
@@ -146,11 +167,13 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
   const fetchData = async () => {
     setLoading(true);
     const db = supabase as any;
-    const [custRes, devRes, maintRes, workOrdersRes] = await Promise.all([
-      supabase.from('customers').select('*').eq('branch', branch).order('name'),
-      db.from('customer_devices').select('*').eq('branch', branch).order('created_at', { ascending: false }),
-      supabase.from('maintenance').select('*').eq('branch', branch).order('next_date', { ascending: false }),
-      supabase.from('work_orders').select('*').eq('branch', branch).order('visit_date', { ascending: false }),
+    const bv = branchDbValuesForUiBranch(branch);
+    const [custRes, devRes, maintRes, workOrdersRes, ccRes] = await Promise.all([
+      supabase.from('customers').select('*').in('branch', bv).order('name'),
+      db.from('customer_devices').select('*').in('branch', bv).order('created_at', { ascending: false }),
+      supabase.from('maintenance').select('*').in('branch', bv).order('next_date', { ascending: false }),
+      supabase.from('work_orders').select('*').in('branch', bv).order('visit_date', { ascending: false }),
+      db.from('candle_changes').select('device_id, change_date').order('change_date', { ascending: false }),
     ]);
     const custs = (custRes.data || []) as Customer[];
     const devs = (devRes.data || []) as CustomerDevice[];
@@ -158,6 +181,15 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
     setDevices(devs);
     setMaintenanceRecords(maintRes.data || []);
     setWorkOrders(workOrdersRes.data || []);
+
+    const lastChangeMap: Record<string, string> = {};
+    (ccRes.data || []).forEach((row: any) => {
+      const deviceId = String(row.device_id || '');
+      const changeDate = String(row.change_date || '').slice(0, 10);
+      if (!deviceId || !changeDate || lastChangeMap[deviceId]) return;
+      lastChangeMap[deviceId] = changeDate;
+    });
+    setLastCandleChangeByDevice(lastChangeMap);
 
     const regions = new Set(custs.map(c => c.region).filter(Boolean));
     const totalVal = devs.reduce((sum, d) => sum + (d.total_price || 0), 0);
@@ -169,10 +201,21 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
   const filteredCustomers = useMemo(() => {
     if (!search) return [];
     const s = search.toLowerCase();
+    const deviceByCustomer = new Map<string, string[]>();
+    devices.forEach((d) => {
+      const arr = deviceByCustomer.get(d.customer_id) || [];
+      arr.push(String(d.customer_code || '').toLowerCase());
+      deviceByCustomer.set(d.customer_id, arr);
+    });
     return customers.filter(c =>
-      c.name.includes(s) || c.phone1.includes(s) || (c.phone2 || '').includes(s) || c.address.includes(s) || (c.region || '').includes(s)
+      c.name.includes(s) ||
+      c.phone1.includes(s) ||
+      (c.phone2 || '').includes(s) ||
+      c.address.includes(s) ||
+      (c.region || '').includes(s) ||
+      (deviceByCustomer.get(c.id) || []).some((code) => code.includes(s))
     ).slice(0, 20);
-  }, [search, customers]);
+  }, [search, customers, devices]);
 
   const customerDevices = useMemo(() => {
     if (!selectedCustomer) return [];
@@ -189,12 +232,62 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
     return workOrders.filter(wo => wo.customer_name === selectedCustomer.name);
   }, [selectedCustomer, workOrders]);
 
+  const customerCodeByName = useMemo(() => {
+    const map = new Map<string, string>();
+    devices.forEach((d) => {
+      const code = String(d.customer_code || '').trim();
+      if (!code) return;
+      const cust = customers.find((c) => c.id === d.customer_id);
+      if (cust?.name) map.set(cust.name, code);
+    });
+    return map;
+  }, [customers, devices]);
+
+  const computedMaintenanceVisits = useMemo(() => {
+    const virtual: Array<{
+      id: string;
+      source: string;
+      customer_name: string;
+      phone: string;
+      customer_code: string;
+      product_name: string;
+      date: string;
+      technician: string;
+      status: string;
+      label: string;
+    }> = [];
+
+    for (const device of devices) {
+      const customer = customers.find((c) => c.id === device.customer_id);
+      const lastChangeDate = lastCandleChangeByDevice[device.id];
+      if (!customer || !lastChangeDate) continue;
+
+      const nextDateStr = getNextMaintenanceDateStr(device, lastChangeDate);
+      if (hasFutureMaintenanceVisit(maintenanceRecords, customer.name, lastChangeDate)) continue;
+
+      virtual.push({
+        id: `computed-maint-${device.id}-${nextDateStr}`,
+        source: 'maintenance',
+        customer_name: customer.name,
+        phone: [customer.phone1, customer.phone2].filter(Boolean).join(' - '),
+        customer_code: customerCodeByName.get(customer.name) || String(device.customer_code || ''),
+        product_name: device.product_name || '',
+        date: nextDateStr,
+        technician: '',
+        status: maintenanceVisitStatus(nextDateStr),
+        label: `صيانة دورية (بعد ${getMaintenanceIntervalMonths(device)} شهر)`,
+      });
+    }
+    return virtual;
+  }, [devices, customers, lastCandleChangeByDevice, maintenanceRecords, customerCodeByName]);
+
   const allVisits = useMemo(() => {
     const maintenanceVisits = maintenanceRecords.map((m) => ({
       id: `maintenance-${m.id}`,
       source: 'maintenance',
       customer_name: m.customer_name,
       phone: m.phone || '',
+      customer_code: customerCodeByName.get(m.customer_name) || '',
       product_name: m.product_name || '',
       date: m.next_date || '',
       technician: m.technician || '',
@@ -207,6 +300,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       source: 'work_order',
       customer_name: wo.customer_name,
       phone: wo.phone || '',
+      customer_code: String((wo as any).customer_code || customerCodeByName.get(wo.customer_name) || ''),
       product_name: wo.product_name || '',
       date: wo.visit_date || '',
       technician: wo.technician || '',
@@ -214,29 +308,37 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       label: wo.order_code || 'أمر عمل',
     }));
 
-    const combined = [...maintenanceVisits, ...workOrderVisits];
+    const combined = [...maintenanceVisits, ...computedMaintenanceVisits, ...workOrderVisits];
 
     const filteredByType = combined.filter((item) => {
       if (visitFilter === 'all') return true;
       if (visitFilter === 'maintenance') return item.source === 'maintenance' && item.label !== 'عطل';
       if (visitFilter === 'breakdown') return item.source === 'maintenance' && item.label === 'عطل';
       if (visitFilter === 'overdue') return item.source === 'maintenance' && item.status === 'overdue';
+      if (visitFilter === 'work_order') return item.source === 'work_order';
       if (visitFilter === 'installment') return false;
       return true;
     });
 
     const q = search.trim();
     const filteredBySearch = q
-      ? filteredByType.filter((item) =>
-          item.customer_name.includes(q) ||
-          item.phone.includes(q) ||
-          item.product_name.includes(q) ||
-          item.label.includes(q)
-        )
+      ? filteredByType.filter((item) => {
+          const ql = q.toLowerCase();
+          const digits = q.replace(/\D/g, '');
+          const phoneDigits = String(item.phone || '').replace(/\D/g, '');
+          return (
+            item.customer_name.toLowerCase().includes(ql) ||
+            item.phone.includes(q) ||
+            (digits.length > 0 && phoneDigits.includes(digits)) ||
+            String(item.customer_code || '').toLowerCase().includes(ql) ||
+            item.product_name.toLowerCase().includes(ql) ||
+            item.label.toLowerCase().includes(ql)
+          );
+        })
       : filteredByType;
 
-    return filteredBySearch.sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
-  }, [maintenanceRecords, workOrders, visitFilter, search]);
+    return filteredBySearch.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  }, [maintenanceRecords, workOrders, visitFilter, search, customerCodeByName, computedMaintenanceVisits]);
 
   const customerSchedule = useMemo(() => {
     const maintenanceDates = customerMaintenance.map(m => ({
@@ -247,6 +349,22 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       technician: m.technician || '',
       status: m.status || 'upcoming',
     }));
+
+    const computedForCustomer = customerDevices.flatMap((device) => {
+      const lastChangeDate = lastCandleChangeByDevice[device.id];
+      if (!lastChangeDate || !selectedCustomer) return [];
+      if (hasFutureMaintenanceVisit(maintenanceRecords, selectedCustomer.name, lastChangeDate)) return [];
+      const nextDateStr = getNextMaintenanceDateStr(device, lastChangeDate);
+      return [{
+        id: `computed-maint-${device.id}-${nextDateStr}`,
+        source: 'maintenance',
+        label: `صيانة قادمة (بعد ${getMaintenanceIntervalMonths(device)} شهر)`,
+        date: nextDateStr,
+        technician: '',
+        status: maintenanceVisitStatus(nextDateStr),
+      }];
+    });
+
     const workOrderDates = customerWorkOrders.map(wo => ({
       id: `workorder-${wo.id}`,
       source: 'work_order',
@@ -255,8 +373,8 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       technician: wo.technician || '',
       status: wo.status || 'pending',
     }));
-    return [...maintenanceDates, ...workOrderDates].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
-  }, [customerMaintenance, customerWorkOrders]);
+    return [...maintenanceDates, ...computedForCustomer, ...workOrderDates].sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  }, [customerMaintenance, customerWorkOrders, customerDevices, lastCandleChangeByDevice, maintenanceRecords, selectedCustomer]);
 
   const selectCustomer = async (customer: Customer) => {
     setSelectedCustomer(customer);
@@ -302,23 +420,13 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
     return { text: `${months} شهر ${days % 30} يوم`, days };
   };
 
-  const getNextMaintenanceDate = (device: CustomerDevice) => {
-    const candles = Array.isArray(device.candles) ? device.candles : [];
-    if (candles.length === 0) return null;
-    const minDuration = Math.min(...candles.map((c: any) => c.duration_months || 3));
-    const nextDate = new Date();
-    nextDate.setMonth(nextDate.getMonth() + minDuration);
-    return nextDate;
-  };
+  const fmtDateDMY = (d: Date) => `${d.getDate().toString().padStart(2, '0')}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getFullYear()}`;
 
-  // Generate invoice HTML for printing/PDF
   const generateInvoiceHTML = (customer: Customer, device: CustomerDevice, cost: number, nextDate: Date | null) => {
-    const nextDateStr = nextDate
-      ? `${nextDate.getDate().toString().padStart(2, '0')}/${(nextDate.getMonth() + 1).toString().padStart(2, '0')}/${nextDate.getFullYear()}`
-      : '../../....';
-    const today = new Date().toLocaleDateString('ar-EG');
+    const nextDateStr = nextDate ? fmtDateDMY(nextDate) : '../../....';
+    const today = fmtDateDMY(new Date());
     const warrantyEnd = getWarrantyEnd(device);
-    const warrantyText = warrantyEnd ? warrantyEnd.toLocaleDateString('ar-EG') : 'غير محدد';
+    const warrantyText = warrantyEnd ? fmtDateDMY(warrantyEnd) : 'غير محدد';
 
     return `<html dir="rtl"><head><title>فاتورة صيانة - ${customer.name}</title>
     <style>
@@ -364,7 +472,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       <div class="info">
         <div class="info-row"><span class="info-label">العميل:</span><span class="info-value">${customer.name}</span></div>
         <div class="info-row"><span class="info-label">التاريخ:</span><span class="info-value">${today}</span></div>
-        <div class="info-row"><span class="info-label">الهاتف:</span><span class="info-value">${customer.phone1}</span></div>
+        <div class="info-row"><span class="info-label">الهاتف:</span><span class="info-value">${[customer.phone1, customer.phone2].filter(Boolean).join(' - ')}</span></div>
         <div class="info-row"><span class="info-label">المنتج:</span><span class="info-value">${device.product_name}</span></div>
         <div class="info-row" style="grid-column:span 2"><span class="info-label">العنوان:</span><span class="info-value">${customer.address}</span></div>
         <div class="info-row"><span class="info-label">نوع الجهاز:</span><span class="info-value">${device.device_type}</span></div>
@@ -403,9 +511,9 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       ? `${nextDate.getDate().toString().padStart(2, '0')}/${(nextDate.getMonth() + 1).toString().padStart(2, '0')}/${nextDate.getFullYear()}`
       : '../../....';
 
-    const today = new Date().toLocaleDateString('ar-EG');
+    const today = fmtDateDMY(new Date());
     const warrantyEnd = getWarrantyEnd(device);
-    const warrantyText = warrantyEnd ? warrantyEnd.toLocaleDateString('ar-EG') : 'غير محدد';
+    const warrantyText = warrantyEnd ? fmtDateDMY(warrantyEnd) : 'غير محدد';
 
     // Build candle change details
     const changedCandles: string[] = [];
@@ -432,7 +540,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
 ━━━━━━━━━━━━━━━━━
 📅 التاريخ: ${today}
 👤 العميل: ${customer.name}
-📞 الهاتف: ${customer.phone1}
+📞 الهاتف: ${[customer.phone1, customer.phone2].filter(Boolean).join(' - ')}
 📍 العنوان: ${customer.address}
 
 🔧 *تفاصيل الخدمة:*
@@ -470,7 +578,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       toast({ title: 'اختر عميل وجهاز أولاً', variant: 'destructive' });
       return;
     }
-    const nextDate = getNextMaintenanceDate(selectedDevice);
+    const nextDate = getNextMaintenanceDate(selectedDevice, maintForm.change_date);
     const invoiceHTML = generateInvoiceHTML(selectedCustomer, selectedDevice, maintForm.cost || 0, nextDate);
     const printWindow = window.open('', '_blank');
     if (printWindow) {
@@ -478,6 +586,91 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       printWindow.document.close();
       setTimeout(() => printWindow.print(), 500);
     }
+  };
+
+  const handlePrintWorkOrder = (wo: any) => {
+    const items = Array.isArray(wo.items) ? wo.items : [];
+    const total = Number(wo.total) || items.reduce((s: number, it: any) => s + (Number(it.value) || Number(it.unit_price) || 0) * (Number(it.qty) || 1), 0);
+    const transport = Number(wo.transport_cost) || 0;
+    const allPhones = workOrderPhonesForPrint(
+      { phone: wo.phone, customer_name: wo.customer_name },
+      customers.map(c => ({ name: c.name, phone1: c.phone1, phone2: c.phone2, whatsapp: c.whatsapp })),
+    );
+    const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><title>أمر عمل ${wo.order_code}</title>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap');
+      * { margin:0; padding:0; box-sizing:border-box; font-family:'Cairo',sans-serif; }
+      body { padding:20px; color:#000; font-size:15px; font-weight:800; }
+      .container { max-width:800px; margin:0 auto; border:2px solid #000; padding:25px; }
+      .top-address { text-align:center; font-size:13px; font-weight:800; color:#000; margin-bottom:8px; line-height:1.6; border-bottom:2px solid #000; padding-bottom:8px; }
+      .header { display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; margin-bottom:18px; border-bottom:2px solid #000; }
+      .header-logo img { max-height:200px; max-width:380px; object-fit:contain; }
+      .header-info { text-align:left; }
+      .code { font-size:14px; color:#000; font-weight:800; }
+      .info { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:18px; font-size:13px; }
+      .info-item { background:#f8f9fa; padding:8px 10px; border-radius:4px; border:1px solid #ddd; }
+      .info-label { color:#000; font-size:12px; font-weight:800; }
+      .info-value { font-weight:900; font-size:15px; color:#000; }
+      table { width:100%; border-collapse:collapse; margin:14px 0; }
+      th { background:#111; color:#fff; padding:10px; font-size:14px; text-align:right; font-weight:800; }
+      td { padding:10px; border:1px solid #333; font-size:14px; font-weight:800; color:#000; }
+      .total-row { background:#f0f4f8; font-weight:800; font-size:16px; }
+      .sigs { display:grid; grid-template-columns:1fr 1fr; gap:30px; text-align:center; margin-top:30px; font-size:13px; color:#000; }
+      .sig-line { border-top:2px solid #000; margin-top:40px; padding-top:5px; font-weight:700; }
+      .footer { margin-top:18px; padding-top:12px; border-top:3px solid #000; font-size:13px; color:#000; text-align:center; line-height:2; font-weight:700; }
+      .footer p { margin:3px 0; }
+      .footer .branch { font-weight:800; font-size:14px; color:#000; background:#f0f4f8; padding:4px 10px; border-radius:4px; display:inline-block; margin:2px 0; }
+      .footer .phones { font-weight:700; font-size:13px; }
+      .footer .hotline { font-weight:800; font-size:15px; color:#000; }
+      @media print { body { padding:10px; } }
+    </style></head><body>
+    <div class="container">
+      <div class="top-address">
+        ${companyInfo.branches[0]} | ${companyInfo.branches[1]}
+      </div>
+      <div class="header">
+        <div class="header-logo"><img src="${logo}" alt="Clean Water Logo" /></div>
+        <div class="header-info"><div class="code">رقم الأمر: ${wo.order_code || '-'}</div><div style="font-size:11px;color:#000;font-weight:600;margin-top:2px">أمر عمل</div></div>
+      </div>
+      <div class="info">
+        <div class="info-item"><span class="info-label">العميل:</span><div class="info-value">${wo.customer_name || '-'}</div></div>
+        <div class="info-item"><span class="info-label">الهاتف:</span><div class="info-value">${allPhones}</div></div>
+        <div class="info-item"><span class="info-label">التاريخ:</span><div class="info-value">${formatDateDisplay(wo.visit_date)}</div></div>
+        <div class="info-item"><span class="info-label">العنوان:</span><div class="info-value">${wo.address || '-'}</div></div>
+        <div class="info-item"><span class="info-label">المنطقة:</span><div class="info-value">${wo.region || '-'}</div></div>
+        <div class="info-item"><span class="info-label">الفني:</span><div class="info-value">${wo.technician || '-'}</div></div>
+        <div class="info-item"><span class="info-label">المنتج:</span><div class="info-value">${wo.product_name || '-'}</div></div>
+        <div class="info-item"><span class="info-label">الحالة:</span><div class="info-value">${wo.status || '-'}</div></div>
+        <div class="info-item"><span class="info-label">حالة الضمان:</span><div class="info-value">${wo.warranty_status || '-'}</div></div>
+      </div>
+      ${items.length > 0 ? `
+        <table>
+          <thead><tr><th>#</th><th>المنتج / البيان</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead>
+          <tbody>${items.map((it: any, idx: number) => {
+            const desc = it.description || it.product_name || '-';
+            const qty = Number(it.qty) || 1;
+            const price = Number(it.value) || Number(it.unit_price) || 0;
+            return `<tr><td style="text-align:center">${idx + 1}</td><td>${desc}</td><td style="text-align:center">${qty}</td><td style="text-align:center">${price}</td><td style="text-align:center;font-weight:700">${qty * price}</td></tr>`;
+          }).join('')}
+          ${transport > 0 ? `<tr><td colspan="4" style="text-align:left;font-weight:700">مواصلات</td><td style="text-align:center;font-weight:700">${transport}</td></tr>` : ''}
+          <tr class="total-row"><td colspan="4" style="text-align:left">الإجمالي</td><td style="text-align:center;font-size:18px;font-weight:800">${total + transport} ج.م</td></tr>
+          </tbody>
+        </table>
+      ` : `<p style="text-align:center;padding:20px;color:#666">لا توجد بنود</p>`}
+      ${wo.notes ? `<div style="background:#f8f9fa;padding:10px;border-radius:4px;margin:12px 0;font-size:13px;font-weight:600"><b>ملاحظات:</b> ${wo.notes}</div>` : ''}
+      <div class="sigs">
+        <div><div style="font-weight:800;font-size:14px;margin-bottom:40px">توقيع العميل</div><div class="sig-line">التوقيع والاسم</div></div>
+        <div><div style="font-weight:800;font-size:14px;margin-bottom:40px">توقيع الفني / المندوب</div><div class="sig-line">التوقيع والاسم</div></div>
+      </div>
+      <div class="footer">
+        <p class="branch">🏢 ${companyInfo.branches[0]}</p>
+        <p class="branch">🏢 ${companyInfo.branches[1]}</p>
+        <p class="phones">خدمة العملاء: ${companyInfo.customerService.join(' - ')}</p>
+        <p class="hotline">📞 الخط الساخن: ${companyInfo.hotline} | إدارة الفنيين: ${companyInfo.techManagement}</p>
+      </div>
+    </div></body></html>`;
+    const w = window.open('', '_blank');
+    if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
   };
 
   const handleSaveMaintenance = async () => {
@@ -493,13 +686,13 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
         candle7: maintForm.candle7, candle8: maintForm.candle8, candle9: maintForm.candle9, candle10: maintForm.candle10,
         tds_reading: maintForm.tds_reading, technician: maintForm.technician,
         cost: maintForm.cost, collected: maintForm.collected,
-        remaining: maintForm.cost - maintForm.collected, notes: maintForm.notes,
+        remaining: invoiceDebtRemaining(maintForm.cost, maintForm.collected), notes: maintForm.notes,
       });
       if (error) throw error;
 
       // Also save to maintenance table
       const user = (await supabase.auth.getUser()).data.user;
-      const nextDate = getNextMaintenanceDate(selectedDevice);
+      const nextDate = getNextMaintenanceDate(selectedDevice, maintForm.change_date);
       const nextDateStr = nextDate ? nextDate.toISOString().split('T')[0] : maintForm.change_date;
       const { data: maintData } = await supabase.from('maintenance').insert({
         customer_name: selectedCustomer.name,
@@ -509,7 +702,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
         technician: maintForm.technician,
         cost: maintForm.cost,
         notes: maintForm.notes,
-        phone: selectedCustomer.phone1,
+        phone: [selectedCustomer.phone1, selectedCustomer.phone2].filter(Boolean).join(' - '),
         status: 'upcoming',
         branch,
         created_by: user?.id,
@@ -520,7 +713,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
         await supabase.from('work_orders').insert({
           order_code: `صيانة-${nextDateStr}-${maintData.id.slice(-6)}`,
           customer_name: selectedCustomer.name,
-          phone: selectedCustomer.phone1,
+          phone: [selectedCustomer.phone1, selectedCustomer.phone2].filter(Boolean).join(' - '),
           address: selectedCustomer.address || '—',
           region: selectedCustomer.region || '',
           product_name: selectedDevice.product_name,
@@ -536,7 +729,10 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
         } as any);
       }
 
-      toast({ title: 'تم تسجيل الصيانة بنجاح' });
+      toast({
+        title: 'تم تسجيل الصيانة بنجاح',
+        description: `تم حجز الصيانة القادمة تلقائياً بعد ${getMaintenanceIntervalMonths(selectedDevice)} شهر: ${formatDateDisplay(nextDateStr)}`,
+      });
 
       // Auto-send WhatsApp + PDF
       sendWhatsAppInvoice(selectedCustomer, selectedDevice, maintForm.cost, nextDate);
@@ -571,7 +767,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
         technician: breakdownForm.technician,
         cost: breakdownForm.cost,
         notes: breakdownForm.notes,
-        phone: breakdownForm.phone || selectedCustomer.phone1,
+        phone: breakdownForm.phone || [selectedCustomer.phone1, selectedCustomer.phone2].filter(Boolean).join(' - '),
         status: 'upcoming',
         branch,
         created_by: user?.id,
@@ -583,7 +779,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
         await supabase.from('work_orders').insert({
           order_code: `صيانة-${breakdownForm.next_date}-${maintData.id.slice(-6)}`,
           customer_name: selectedCustomer.name,
-          phone: breakdownForm.phone || selectedCustomer.phone1,
+          phone: breakdownForm.phone || [selectedCustomer.phone1, selectedCustomer.phone2].filter(Boolean).join(' - '),
           address: selectedCustomer.address || '—',
           region: selectedCustomer.region || '',
           product_name: selectedDevice.product_name,
@@ -623,7 +819,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
     setSaving(true);
     try {
       const { id, ...updates } = editMaintForm as CandleChange;
-      const remaining = (updates.cost || 0) - (updates.collected || 0);
+      const remaining = invoiceDebtRemaining(updates.cost || 0, updates.collected || 0);
       const { error } = await (supabase as any).from('candle_changes').update({
         change_date: updates.change_date,
         candle1: updates.candle1, candle2: updates.candle2, candle3: updates.candle3,
@@ -641,6 +837,33 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const deleteWorkOrderVisit = async (wo: any, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!confirm(`حذف أمر العمل "${wo.order_code || wo.customer_name}"؟`)) return;
+    if (!promptDeletePassword()) return;
+    try {
+      const { error } = await supabase.from('work_orders').delete().eq('id', wo.id);
+      if (error) throw error;
+      toast({ title: 'تم حذف أمر العمل' });
+      fetchData();
+    } catch (err: any) {
+      toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
+    }
+  };
+
+  const deleteMaintRecord = async (cc: CandleChange) => {
+    if (!confirm(`حذف سجل الصيانة بتاريخ ${formatDateDisplay(cc.change_date)}؟`)) return;
+    if (!promptDeletePassword()) return;
+    try {
+      const { error } = await (supabase as any).from('candle_changes').delete().eq('id', cc.id);
+      if (error) throw error;
+      toast({ title: 'تم حذف سجل الصيانة' });
+      if (selectedDevice) selectDevice(selectedDevice);
+    } catch (err: any) {
+      toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
     }
   };
 
@@ -670,6 +893,19 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const deleteBreakdown = async (m: any) => {
+    if (!confirm(`حذف سجل العطل بتاريخ ${formatDateDisplay(m.next_date)}؟`)) return;
+    if (!promptDeletePassword()) return;
+    try {
+      const { error } = await supabase.from('maintenance').delete().eq('id', m.id);
+      if (error) throw error;
+      toast({ title: 'تم حذف سجل العطل' });
+      fetchData();
+    } catch (err: any) {
+      toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
     }
   };
 
@@ -798,10 +1034,10 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       <div class="header"><h1>🔵 Clean Water</h1><p>كارنيه صيانة</p></div>
       <div class="info-grid">
         <div class="info-item"><span class="info-label">العميل:</span> <strong>${selectedCustomer.name}</strong></div>
-        <div class="info-item"><span class="info-label">الهاتف:</span> ${selectedCustomer.phone1}</div>
+        <div class="info-item"><span class="info-label">الهاتف:</span> ${[selectedCustomer.phone1, selectedCustomer.phone2].filter(Boolean).join(' - ')}</div>
         <div class="info-item"><span class="info-label">المنتج:</span> ${selectedDevice.product_name}</div>
         <div class="info-item"><span class="info-label">الكود:</span> ${selectedDevice.customer_code || '-'}</div>
-        <div class="info-item"><span class="info-label">تاريخ التركيب:</span> ${selectedDevice.install_date || '-'}</div>
+        <div class="info-item"><span class="info-label">تاريخ التركيب:</span> ${formatDateDisplay(selectedDevice.install_date)}</div>
         <div class="info-item"><span class="info-label">الضمان:</span> ${selectedDevice.warranty_months} شهر</div>
         <div class="info-item"><span class="info-label">العنوان:</span> ${selectedCustomer.address}</div>
         <div class="info-item"><span class="info-label">الفرع:</span> ${selectedDevice.branch}</div>
@@ -814,7 +1050,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       <h3>سجل الصيانات</h3>
       <table>
         <thead><tr><th>#</th><th>التاريخ</th><th>ش1</th><th>ش2</th><th>ش3</th><th>ش4</th><th>ش5</th><th>ش6</th><th>ش7</th><th>ش8</th><th>ش9</th><th>ش10</th><th>TDS</th><th>الفني</th><th>القيمة</th></tr></thead>
-        <tbody>${candleChanges.map((cc, i) => `<tr><td>${i + 1}</td><td>${cc.change_date}</td>
+        <tbody>${candleChanges.map((cc, i) => `<tr><td>${i + 1}</td><td>${formatDateDisplay(cc.change_date)}</td>
           ${[cc.candle1, cc.candle2, cc.candle3, cc.candle4, cc.candle5, cc.candle6, cc.candle7, cc.candle8, cc.candle9, cc.candle10].map(v => `<td>${v ? '✓' : ''}</td>`).join('')}
           <td>${cc.tds_reading || '-'}</td><td>${cc.technician}</td><td>${cc.cost}</td></tr>`).join('')}
         </tbody>
@@ -857,6 +1093,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
         {[
           { key: 'all', label: 'الكل' },
           { key: 'maintenance', label: 'صيانات' },
+          { key: 'work_order', label: 'أوامر عمل' },
           { key: 'installment', label: 'أقساط' },
           { key: 'breakdown', label: 'أعطال' },
           { key: 'overdue', label: 'بواقي' },
@@ -871,6 +1108,14 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
           </Button>
         </div>
       </div>
+      <Card className="border-blue-200 bg-blue-50/50 dark:bg-blue-950/20 dark:border-blue-800">
+        <CardContent className="p-3 text-xs space-y-1">
+          <p className="font-bold text-blue-700 dark:text-blue-300">توضيح الفرق:</p>
+          <p><strong>أوامر العمل:</strong> كل أمر شغل بيتعمل للعميل من قسم «أوامر العمل» بيظهر هنا — يشمل التركيبات الجديدة والإصلاحات والطلبات الخاصة بأسعارها ومنتجاتها.</p>
+          <p><strong>الصيانة:</strong> السجلات الدورية لتغيير الشمعات والأعطال اللي بتتسجل هنا في «إدارة الزيارات» أو من قسم «الصيانة» — تشمل مواعيد الصيانة القادمة وتاريخ الصيانات السابقة.</p>
+          <p className="text-muted-foreground">عند تسجيل صيانة أو عطل من هنا، يتم إنشاء أمر عمل مرتبط تلقائياً.</p>
+        </CardContent>
+      </Card>
 
       {/* Search Bar */}
       <Card>
@@ -981,6 +1226,21 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                             <span className="text-muted-foreground block">باقي الضمان</span>
                             <span className="font-bold text-xs">{getWarrantyRemaining(selectedDevice).text}</span>
                           </div>
+                          {(() => {
+                            const lastChange = lastCandleChangeByDevice[selectedDevice.id]
+                              || candleChanges[0]?.change_date?.slice(0, 10);
+                            if (!lastChange) return null;
+                            const nextDateStr = getNextMaintenanceDateStr(selectedDevice, lastChange);
+                            const interval = getMaintenanceIntervalMonths(selectedDevice);
+                            const status = maintenanceVisitStatus(nextDateStr);
+                            return (
+                              <div className={`col-span-2 rounded p-2 border ${status === 'overdue' ? 'bg-destructive/10 border-destructive/30' : 'bg-primary/5 border-primary/20'}`}>
+                                <span className="text-muted-foreground block text-[10px]">الصيانة القادمة (كل {interval} شهر)</span>
+                                <span className="font-bold text-sm">{formatDateDisplay(nextDateStr)}</span>
+                                <span className="text-[10px] text-muted-foreground block mt-0.5">آخر صيانة: {formatDateDisplay(lastChange)}</span>
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>
@@ -997,7 +1257,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                         <Label className="text-[10px] text-muted-foreground mb-1 block">آخر الزيارات</Label>
                         {customerMaintenance.slice(0, 3).map(m => (
                           <div key={m.id} className="flex justify-between items-center text-[10px] py-0.5">
-                            <span>{m.next_date} - {m.type || 'صيانة'} - {m.technician || 'غير محدد'}</span>
+                            <span>{formatDateDisplay(m.next_date)} - {m.type || 'صيانة'} - {m.technician || 'غير محدد'}</span>
                             <Badge variant={m.status === 'completed' ? 'default' : m.status === 'overdue' ? 'destructive' : 'secondary'} className="text-[8px] h-4">
                               {m.status === 'completed' ? 'تمت' : m.status === 'overdue' ? 'متأخر' : 'إنتظار'}
                             </Badge>
@@ -1063,7 +1323,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                   <Button
                     size="sm" variant="outline"
                     className="w-full text-xs h-7 gap-1 justify-start text-green-600 border-green-300 hover:bg-green-50"
-                    onClick={() => sendWhatsAppInvoice(selectedCustomer, selectedDevice, maintForm.cost || 0, getNextMaintenanceDate(selectedDevice))}
+                    onClick={() => sendWhatsAppInvoice(selectedCustomer, selectedDevice, maintForm.cost || 0, getNextMaintenanceDate(selectedDevice, maintForm.change_date))}
                   >
                     <MessageCircle className="h-3 w-3" /> إرسال فاتورة واتساب
                   </Button>
@@ -1075,6 +1335,15 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                     onClick={handlePrintInvoice}
                   >
                     <Printer className="h-3 w-3" /> طباعة فاتورة
+                  </Button>
+                )}
+                {customerWorkOrders.length > 0 && (
+                  <Button
+                    size="sm" variant="outline"
+                    className="w-full text-xs h-7 gap-1 justify-start"
+                    onClick={() => handlePrintWorkOrder(customerWorkOrders[0])}
+                  >
+                    <Printer className="h-3 w-3" /> طباعة آخر أمر عمل
                   </Button>
                 )}
                 {selectedDevice && (
@@ -1149,7 +1418,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                         <div className="bg-muted/50 rounded p-2"><span className="text-muted-foreground block text-[10px]">نوع العقد</span><span className="font-bold">{selectedDevice.contract_type}</span></div>
                         <div className="bg-muted/50 rounded p-2"><span className="text-muted-foreground block text-[10px]">سعر البيع</span><span className="font-bold">{formatEGP(selectedDevice.selling_price)}</span></div>
                         <div className="bg-muted/50 rounded p-2"><span className="text-muted-foreground block text-[10px]">الإجمالي</span><span className="font-bold">{formatEGP(selectedDevice.total_price)}</span></div>
-                        <div className="bg-muted/50 rounded p-2"><span className="text-muted-foreground block text-[10px]">تاريخ التركيب</span><span className="font-bold">{selectedDevice.install_date || '-'}</span></div>
+                        <div className="bg-muted/50 rounded p-2"><span className="text-muted-foreground block text-[10px]">تاريخ التركيب</span><span className="font-bold">{formatDateDisplay(selectedDevice.install_date)}</span></div>
                         <div className="bg-muted/50 rounded p-2"><span className="text-muted-foreground block text-[10px]">مدة الضمان</span><span className="font-bold">{selectedDevice.warranty_months} شهر</span></div>
                         <div className="bg-muted/50 rounded p-2"><span className="text-muted-foreground block text-[10px]">حالة الضمان</span>
                           <Badge variant={getWarrantyEnd(selectedDevice) && getWarrantyEnd(selectedDevice)! > new Date() ? 'default' : 'destructive'} className="text-[10px]">
@@ -1188,7 +1457,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                 <Card>
                   <CardContent className="p-3">
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                      <div className="bg-muted/50 rounded p-2"><span className="text-muted-foreground block text-[10px]">تاريخ التركيب</span><span className="font-medium">{selectedDevice.install_date || '-'}</span></div>
+                      <div className="bg-muted/50 rounded p-2"><span className="text-muted-foreground block text-[10px]">تاريخ التركيب</span><span className="font-medium">{formatDateDisplay(selectedDevice.install_date)}</span></div>
                       <div className="bg-muted/50 rounded p-2"><span className="text-muted-foreground block text-[10px]">مدة الضمان</span><span className="font-medium">{selectedDevice.warranty_months} شهر</span></div>
                       <div className="bg-muted/50 rounded p-2"><span className="text-muted-foreground block text-[10px]">سعر البيع</span><span className="font-medium">{formatEGP(selectedDevice.selling_price)}</span></div>
                       <div className="bg-muted/50 rounded p-2"><span className="text-muted-foreground block text-[10px]">الإجمالي</span><span className="font-medium">{formatEGP(selectedDevice.total_price)}</span></div>
@@ -1295,21 +1564,36 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                           <p className="text-xs text-muted-foreground text-center py-4">لا توجد مواعيد صيانة أو أوامر عمل</p>
                         ) : (
                           <div className="space-y-2">
-                            {customerSchedule.map((item) => (
+                            {customerSchedule.map((item) => {
+                              const wo = item.source === 'work_order' ? workOrders.find(w => `workorder-${w.id}` === item.id) : null;
+                              return (
                               <Card key={item.id}>
                                 <CardContent className="p-2 text-xs flex items-center justify-between gap-2">
                                   <div>
                                     <p className="font-medium">
                                       {item.source === 'maintenance' ? 'صيانة' : 'أمر عمل'} - {item.label}
                                     </p>
-                                    <p className="text-muted-foreground">{item.date} • {item.technician || 'غير محدد'}</p>
+                                    <p className="text-muted-foreground">{formatDateDisplay(item.date)} • {item.technician || 'غير محدد'}</p>
                                   </div>
-                                  <Badge variant={item.source === 'maintenance' ? 'secondary' : 'outline'} className="text-[10px]">
-                                    {item.source === 'maintenance' ? 'صيانة' : 'زيارة'}
-                                  </Badge>
+                                  <div className="flex items-center gap-1">
+                                    {wo && (
+                                      <>
+                                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0" onClick={() => handlePrintWorkOrder(wo)} title="طباعة أمر العمل">
+                                          <Printer className="h-3 w-3" />
+                                        </Button>
+                                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-destructive" onClick={(e) => deleteWorkOrderVisit(wo, e)} title="حذف أمر العمل">
+                                          <Trash2 className="h-3 w-3" />
+                                        </Button>
+                                      </>
+                                    )}
+                                    <Badge variant={item.source === 'maintenance' ? 'secondary' : 'outline'} className="text-[10px]">
+                                      {item.source === 'maintenance' ? 'صيانة' : 'زيارة'}
+                                    </Badge>
+                                  </div>
                                 </CardContent>
                               </Card>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </TabsContent>
@@ -1329,7 +1613,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                                   <th className="border p-1">ش4</th><th className="border p-1">ش5</th><th className="border p-1">ش6</th><th className="border p-1">ش7</th>
                                   <th className="border p-1">ش8</th><th className="border p-1">ش9</th><th className="border p-1">ش10</th>
                                   <th className="border p-1">TDS</th><th className="border p-1">الفني</th>
-                                  <th className="border p-1">القيمة</th><th className="border p-1">محصل</th><th className="border p-1">باقي</th>
+                                  <th className="border p-1">القيمة</th><th className="border p-1">محصل</th><th className="border p-1">باقي</th><th className="border p-1">ملاحظات</th>
                                   <th className="border p-1">إجراء</th>
                                 </tr>
                               </thead>
@@ -1348,6 +1632,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                                       <td className="border p-1"><Input type="number" value={editMaintForm.cost || 0} onChange={e => setEditMaintForm(p => ({...p, cost: +e.target.value}))} className="h-5 text-[10px] w-14" /></td>
                                       <td className="border p-1"><Input type="number" value={editMaintForm.collected || 0} onChange={e => setEditMaintForm(p => ({...p, collected: +e.target.value}))} className="h-5 text-[10px] w-14" /></td>
                                       <td className="border p-1 text-center font-bold">{(editMaintForm.cost || 0) - (editMaintForm.collected || 0)}</td>
+                                      <td className="border p-1"><Input value={String(editMaintForm.notes || '')} onChange={e => setEditMaintForm(p => ({...p, notes: e.target.value}))} className="h-5 text-[10px] w-24" /></td>
                                       <td className="border p-1">
                                         <div className="flex gap-0.5">
                                           <Button size="sm" variant="ghost" className="h-5 w-5 p-0" onClick={saveEditMaint} disabled={saving}><Save className="h-3 w-3 text-green-600" /></Button>
@@ -1358,7 +1643,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                                   ) : (
                                     <tr key={cc.id} className={`hover:bg-muted/30 ${i % 2 === 0 ? '' : 'bg-muted/20'}`}>
                                       <td className="border p-1 text-center">{i + 1}</td>
-                                      <td className="border p-1 font-medium">{cc.change_date}</td>
+                                      <td className="border p-1 font-medium">{formatDateDisplay(cc.change_date)}</td>
                                       {[cc.candle1, cc.candle2, cc.candle3, cc.candle4, cc.candle5, cc.candle6, cc.candle7, cc.candle8, cc.candle9, cc.candle10].map((v, j) => (
                                         <td key={j} className="border p-1 text-center">{v ? <span className="text-green-600 font-bold">تمت</span> : ''}</td>
                                       ))}
@@ -1367,8 +1652,12 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                                       <td className="border p-1 text-center">{cc.cost}</td>
                                       <td className="border p-1 text-center">{cc.collected}</td>
                                       <td className="border p-1 text-center font-bold">{cc.remaining > 0 ? cc.remaining : 0}</td>
+                                      <td className="border p-1 text-center">{cc.notes || '-'}</td>
                                       <td className="border p-1 text-center">
-                                        <Button size="sm" variant="ghost" className="h-5 w-5 p-0" onClick={() => startEditMaint(cc)}><Edit className="h-3 w-3" /></Button>
+                                        <div className="flex items-center justify-center gap-0.5">
+                                          <Button size="sm" variant="ghost" className="h-5 w-5 p-0" onClick={() => startEditMaint(cc)}><Edit className="h-3 w-3" /></Button>
+                                          <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-destructive" onClick={() => deleteMaintRecord(cc)}><Trash2 className="h-3 w-3" /></Button>
+                                        </div>
                                       </td>
                                     </tr>
                                   )
@@ -1415,13 +1704,14 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                               <CardContent className="p-2 text-xs flex justify-between items-start">
                                 <div>
                                   <p className="font-medium">{m.type} - {m.product_name}</p>
-                                  <p className="text-muted-foreground">{m.next_date} • {m.technician || 'غير محدد'}</p>
+                                  <p className="text-muted-foreground">{formatDateDisplay(m.next_date)} • {m.technician || 'غير محدد'}</p>
                                   {m.notes && <p className="text-muted-foreground mt-0.5">{m.notes}</p>}
                                 </div>
                                 <div className="flex items-center gap-1">
                                   {m.cost > 0 && <p className="font-medium">{formatEGP(m.cost)}</p>}
                                   <Badge variant="destructive" className="text-[8px] h-4">{m.status}</Badge>
                                   <Button size="sm" variant="ghost" className="h-5 w-5 p-0" onClick={() => startEditBreakdown(m)}><Edit className="h-3 w-3" /></Button>
+                                  <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-destructive" onClick={() => deleteBreakdown(m)}><Trash2 className="h-3 w-3" /></Button>
                                 </div>
                               </CardContent>
                             </Card>
@@ -1444,7 +1734,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                               <tbody>
                                 {candleChanges.filter(cc => cc.remaining > 0).map(cc => (
                                   <tr key={cc.id}>
-                                    <td className="border p-1">{cc.change_date}</td>
+                                    <td className="border p-1">{formatDateDisplay(cc.change_date)}</td>
                                     <td className="border p-1">{cc.cost}</td>
                                     <td className="border p-1">{cc.collected}</td>
                                     <td className="border p-1 font-bold text-destructive">{cc.remaining}</td>
@@ -1502,9 +1792,9 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                                   ) : (
                                     <tr key={inst.id} className={inst.status === 'تمت' ? 'bg-green-50 dark:bg-green-950/20' : ''}>
                                       <td className="border p-1 text-center">{i + 1}</td>
-                                      <td className="border p-1">{inst.installment_date}</td>
+                                      <td className="border p-1">{formatDateDisplay(inst.installment_date)}</td>
                                       <td className="border p-1">{formatEGP(inst.amount)}</td>
-                                      <td className="border p-1">{inst.collection_date || '-'}</td>
+                                      <td className="border p-1">{inst.collection_date ? formatDateDisplay(inst.collection_date) : '-'}</td>
                                       <td className="border p-1 text-center">
                                         <Badge variant={inst.status === 'تمت' ? 'default' : 'secondary'} className="text-[8px] h-4">{inst.status}</Badge>
                                       </td>
@@ -1562,6 +1852,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                 const matchedCustomer = customers.find(
                   (customer) => customer.name === visit.customer_name || customer.phone1 === visit.phone
                 );
+                const wo = visit.source === 'work_order' ? workOrders.find(w => `workorder-${w.id}` === visit.id) : null;
 
                 return (
                   <Card
@@ -1580,16 +1871,28 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                       <div className="min-w-0">
                         <p className="font-medium text-sm truncate">{visit.customer_name}</p>
                         <p className="text-xs text-muted-foreground truncate">
-                          {visit.product_name || 'بدون منتج'} • {visit.label} • {visit.date}
+                          {visit.product_name || 'بدون منتج'} • {visit.label} • {formatDateDisplay(visit.date)}
                         </p>
                         <p className="text-[11px] text-muted-foreground">
                           {visit.phone || 'بدون هاتف'} • {visit.technician || 'فني غير محدد'}
                         </p>
                       </div>
                       <div className="flex flex-col items-end gap-1 shrink-0">
-                        <Badge variant={visit.source === 'maintenance' ? 'secondary' : 'outline'} className="text-[10px]">
-                          {visit.source === 'maintenance' ? 'صيانة' : 'أمر عمل'}
-                        </Badge>
+                        <div className="flex items-center gap-1">
+                          {wo && (
+                            <>
+                              <Button size="sm" variant="ghost" className="h-5 w-5 p-0" onClick={(e) => { e.stopPropagation(); handlePrintWorkOrder(wo); }} title="طباعة">
+                                <Printer className="h-3 w-3" />
+                              </Button>
+                              <Button size="sm" variant="ghost" className="h-5 w-5 p-0 text-destructive" onClick={(e) => deleteWorkOrderVisit(wo, e)} title="حذف">
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            </>
+                          )}
+                          <Badge variant={visit.source === 'maintenance' ? 'secondary' : 'outline'} className="text-[10px]">
+                            {visit.source === 'maintenance' ? 'صيانة' : 'أمر عمل'}
+                          </Badge>
+                        </div>
                         <Badge
                           variant={
                             visit.status === 'overdue'

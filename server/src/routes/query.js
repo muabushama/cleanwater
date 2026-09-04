@@ -1,37 +1,14 @@
 const crypto = require("crypto");
 const express = require("express");
-const { query, getConnection } = require("../db");
+const { pool, query, getConnection } = require("../db");
 const { TABLES, DEFAULT_CANDLES, parseRow, stringifyPayload, resolveTableKey } = require("../schema");
 const { buildWhere, buildOrder, buildLimit } = require("../utils/query");
 const { isAdmin } = require("../utils/auth");
-
-async function deductStockOnInvoice(connection, row) {
-  let productId = row.product_id;
-  const qty = Math.max(0, Number(row.quantity) || 1);
-  const branch = row.branch || "فرع الإسكندرية";
-  if (qty <= 0) return;
-
-  if (!productId && row.product_name) {
-    const [byName] = await connection.query(
-      "SELECT id FROM products WHERE name = ? LIMIT 1",
-      [row.product_name]
-    );
-    if (byName && byName[0]) productId = byName[0].id;
-  }
-  if (!productId) return;
-
-  const [updated] = await connection.query(
-    "UPDATE products SET stock = GREATEST(0, COALESCE(stock, 0) - ?) WHERE id = ?",
-    [qty, productId]
-  );
-  if (updated.affectedRows === 0) return;
-
-  const movementId = crypto.randomUUID();
-  await connection.query(
-    "INSERT INTO stock_movements (id, product_id, branch, type, quantity, reference_type, reference_id) VALUES (?, ?, ?, 'sale', ?, 'invoice', ?)",
-    [movementId, productId, branch, qty, row.id]
-  ).catch(() => {});
-}
+const {
+  mergeBranchScopeFilters,
+  applyBranchScopeToInsertRow,
+  applyBranchScopeToUpdateValues,
+} = require("../utils/branchScope");
 
 const router = express.Router();
 
@@ -131,7 +108,8 @@ router.post("/:table/select", async (req, res) => {
   const table = req.resolvedTable;
 
   const { columns = "*", filters = [], order = null, limit = null } = req.body || {};
-  const where = buildWhere(filters);
+  const scopedFilters = mergeBranchScopeFilters(req.user, table, filters);
+  const where = buildWhere(scopedFilters);
 
   try {
     let sql = `SELECT * FROM \`${table}\``;
@@ -170,11 +148,17 @@ router.post("/:table/insert", async (req, res) => {
   const table = req.resolvedTable;
 
   const values = Array.isArray(req.body?.values) ? req.body.values : [req.body?.values];
-  const rows = values.filter(Boolean).map((row) => stringifyPayload(table, normalizeRow(table, row, req)));
+  const rows = values
+    .filter(Boolean)
+    .map((row) =>
+      stringifyPayload(table, applyBranchScopeToInsertRow(req.user, table, normalizeRow(table, row, req))),
+    );
 
   if (rows.length === 0) {
     return res.status(400).json({ data: null, error: { message: "No rows provided" } });
   }
+
+  let validCols = null;
 
   const connection = await getConnection();
   try {
@@ -182,18 +166,32 @@ router.post("/:table/insert", async (req, res) => {
 
     for (const row of rows) {
       validateMutation(table, row, req);
-      const columns = Object.keys(row);
-      const placeholders = columns.map(() => "?").join(", ");
-      await connection.query(
-        `INSERT INTO \`${table}\` (${columns.map((column) => `\`${column}\``).join(", ")}) VALUES (${placeholders})`,
-        columns.map((column) => row[column])
-      );
+      let columns = Object.keys(row);
+      try {
+        const placeholders = columns.map(() => "?").join(", ");
+        await connection.query(
+          `INSERT INTO \`${table}\` (${columns.map((column) => `\`${column}\``).join(", ")}) VALUES (${placeholders})`,
+          columns.map((column) => row[column])
+        );
+      } catch (insertErr) {
+        if (/Unknown column|doesn.t have a default/i.test(insertErr.message || "")) {
+          if (!validCols) {
+            const [colRows] = await connection.query(`SHOW COLUMNS FROM \`${table}\``);
+            validCols = new Set(colRows.map((c) => c.Field));
+          }
+          columns = columns.filter((c) => validCols.has(c));
+          const placeholders = columns.map(() => "?").join(", ");
+          await connection.query(
+            `INSERT INTO \`${table}\` (${columns.map((column) => `\`${column}\``).join(", ")}) VALUES (${placeholders})`,
+            columns.map((column) => row[column])
+          );
+        } else {
+          throw insertErr;
+        }
+      }
 
       if (table === "customer_devices") {
         await maybeCreateInstallments(connection, row);
-      }
-      if (table === "invoices" && row.product_id) {
-        await deductStockOnInvoice(connection, row);
       }
     }
 
@@ -211,9 +209,11 @@ router.post("/:table/update", async (req, res) => {
   if (!ensurePermission(req, res, req.params.table, "update")) return;
   const table = req.resolvedTable;
 
-  const values = stringifyPayload(table, req.body?.values || {});
+  const rawValues = applyBranchScopeToUpdateValues(req.user, table, req.body?.values || {});
+  const values = stringifyPayload(table, rawValues);
   const fields = Object.keys(values);
-  const where = buildWhere(req.body?.filters || []);
+  const scopedFilters = mergeBranchScopeFilters(req.user, table, req.body?.filters || []);
+  const where = buildWhere(scopedFilters);
 
   if (fields.length === 0) {
     return res.status(400).json({ data: null, error: { message: "No values provided" } });
@@ -229,6 +229,28 @@ router.post("/:table/update", async (req, res) => {
     const rows = await query(`SELECT * FROM \`${table}\`${where.sql}`, where.values);
     return res.json({ data: rows.map((row) => parseRow(table, { ...row })), error: null });
   } catch (error) {
+    const msg = error.message || "";
+    if (/Unknown column|doesn.t have a default/i.test(msg)) {
+      try {
+        const [cols] = await pool.query(`SHOW COLUMNS FROM \`${table}\``);
+        const validCols = new Set(cols.map((c) => c.Field));
+        const safeValues = {};
+        for (const f of fields) {
+          if (validCols.has(f)) safeValues[f] = values[f];
+        }
+        const safeFields = Object.keys(safeValues);
+        if (safeFields.length > 0) {
+          await query(
+            `UPDATE \`${table}\` SET ${safeFields.map((f) => `\`${f}\` = ?`).join(", ")}${where.sql}`,
+            [...safeFields.map((f) => safeValues[f]), ...where.values]
+          );
+          const rows = await query(`SELECT * FROM \`${table}\`${where.sql}`, where.values);
+          return res.json({ data: rows.map((row) => parseRow(table, { ...row })), error: null });
+        }
+      } catch (retryErr) {
+        return res.status(400).json({ data: null, error: { message: retryErr.message || "Update failed" } });
+      }
+    }
     return res.status(400).json({ data: null, error: { message: error.message || "Update failed" } });
   }
 });
@@ -237,7 +259,8 @@ router.post("/:table/delete", async (req, res) => {
   if (!ensurePermission(req, res, req.params.table, "delete")) return;
   const table = req.resolvedTable;
 
-  const where = buildWhere(req.body?.filters || []);
+  const scopedFilters = mergeBranchScopeFilters(req.user, table, req.body?.filters || []);
+  const where = buildWhere(scopedFilters);
   if (!where.sql) {
     return res.status(400).json({ data: null, error: { message: "Delete requires filters" } });
   }

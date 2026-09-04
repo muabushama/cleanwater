@@ -19,10 +19,18 @@ CREATE TABLE IF NOT EXISTS profiles (
 CREATE TABLE IF NOT EXISTS user_roles (
   id VARCHAR(36) PRIMARY KEY,
   user_id VARCHAR(36) NOT NULL,
-  role ENUM('admin', 'sales_rep', 'customer_service') NOT NULL,
+  role ENUM('admin', 'sales_rep', 'customer_service', 'warehouse_keeper', 'staff') NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_user_roles_user_role (user_id, role),
   CONSTRAINT fk_user_roles_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_permissions (
+  user_id VARCHAR(36) NOT NULL,
+  permission_key VARCHAR(64) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, permission_key),
+  CONSTRAINT fk_user_permissions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS customers (
@@ -35,12 +43,14 @@ CREATE TABLE IF NOT EXISTS customers (
   region VARCHAR(191) NOT NULL DEFAULT '',
   area_id VARCHAR(36) NULL,
   branch VARCHAR(191) NOT NULL DEFAULT 'فرع الإسكندرية',
+  customer_type VARCHAR(50) NOT NULL DEFAULT 'sales',
   notes TEXT NULL,
   created_by VARCHAR(36) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_customers_branch (branch),
   KEY idx_customers_name (name),
   KEY idx_customers_phone1 (phone1),
+  KEY idx_customers_customer_type (customer_type),
   CONSTRAINT fk_customers_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );
 
@@ -60,6 +70,7 @@ CREATE TABLE IF NOT EXISTS products (
   warranty INT NOT NULL DEFAULT 12,
   image TEXT NULL,
   branch VARCHAR(191) NOT NULL DEFAULT 'فرع الإسكندرية',
+  storage_location VARCHAR(191) NOT NULL DEFAULT 'المخزن الرئيسي',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_products_name (name),
   KEY idx_products_branch (branch),
@@ -77,6 +88,12 @@ CREATE TABLE IF NOT EXISTS customer_devices (
   contract_type VARCHAR(100) NOT NULL DEFAULT 'كاش',
   selling_price DECIMAL(12,2) NOT NULL DEFAULT 0,
   total_price DECIMAL(12,2) NOT NULL DEFAULT 0,
+  contract_value DECIMAL(12,2) NOT NULL DEFAULT 0,
+  contract_duration_months INT NOT NULL DEFAULT 0,
+  contract_start_date DATE NULL,
+  contract_end_date DATE NULL,
+  contract_first_visit_date DATE NULL,
+  contract_installment_interval_months INT NOT NULL DEFAULT 1,
   installments_count INT NOT NULL DEFAULT 0,
   installment_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
   first_installment_date DATE NULL,
@@ -154,12 +171,24 @@ CREATE TABLE IF NOT EXISTS invoices (
   rep_name VARCHAR(191) NOT NULL DEFAULT '',
   rep_names JSON NULL,
   branch VARCHAR(191) NOT NULL DEFAULT 'فرع الإسكندرية',
+  due_date DATE NULL,
+  delivery_status VARCHAR(50) NOT NULL DEFAULT 'pending',
+  notes TEXT NULL,
+  subtotal DECIMAL(12,2) NULL,
+  discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+  discount_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+  tax_percent DECIMAL(5,2) NOT NULL DEFAULT 0,
+  tax_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+  auto_stock_deduct TINYINT(1) NOT NULL DEFAULT 1,
   created_by VARCHAR(36) NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_invoices_branch (branch),
   KEY idx_invoices_customer (customer_name),
   KEY idx_invoices_date (date),
   KEY idx_invoices_product (product_id),
+  KEY idx_invoices_due_date (due_date),
+  KEY idx_invoices_delivery_status (delivery_status),
+  KEY idx_invoices_status (status),
   CONSTRAINT fk_invoices_customer FOREIGN KEY (customer_id) REFERENCES customers(id) ON DELETE SET NULL,
   CONSTRAINT fk_invoices_created_by FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 );
@@ -249,6 +278,10 @@ CREATE TABLE IF NOT EXISTS stock_movements (
   branch VARCHAR(191) NOT NULL DEFAULT 'فرع الإسكندرية',
   type VARCHAR(50) NOT NULL DEFAULT 'sale',
   quantity INT NOT NULL DEFAULT 0,
+  unit_cost DECIMAL(12,2) NOT NULL DEFAULT 0,
+  movement_date DATE NULL,
+  warehouse_id VARCHAR(36) NULL,
+  technician_user_id VARCHAR(36) NULL,
   reference_type VARCHAR(50) NULL,
   reference_id VARCHAR(36) NULL,
   notes TEXT NULL,
@@ -266,6 +299,48 @@ CREATE TABLE IF NOT EXISTS inventory_categories (
   sort_order INT NOT NULL DEFAULT 0,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_inv_cat_parent (parent_id)
+);
+
+CREATE TABLE IF NOT EXISTS purchases (
+  id VARCHAR(36) PRIMARY KEY,
+  purchase_number VARCHAR(191) NOT NULL,
+  supplier_name VARCHAR(191) NOT NULL DEFAULT '',
+  product_id VARCHAR(36) NULL,
+  product_name VARCHAR(191) NOT NULL DEFAULT '',
+  quantity INT NOT NULL DEFAULT 1,
+  unit_price DECIMAL(12,2) NOT NULL DEFAULT 0,
+  total DECIMAL(12,2) NOT NULL DEFAULT 0,
+  purchase_date DATE NOT NULL,
+  branch VARCHAR(191) NOT NULL DEFAULT 'فرع الإسكندرية',
+  invoice_file_url TEXT NULL,
+  rep_name VARCHAR(191) NULL,
+  notes TEXT NULL,
+  created_by VARCHAR(36) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_purchases_branch (branch),
+  KEY idx_purchases_date (purchase_date),
+  KEY idx_purchases_product (product_id)
+);
+
+CREATE TABLE IF NOT EXISTS returns (
+  id VARCHAR(36) PRIMARY KEY,
+  return_number VARCHAR(191) NOT NULL,
+  invoice_id VARCHAR(36) NULL,
+  customer_name VARCHAR(191) NOT NULL DEFAULT '',
+  product_id VARCHAR(36) NULL,
+  product_name VARCHAR(191) NOT NULL DEFAULT '',
+  quantity INT NOT NULL DEFAULT 1,
+  amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+  return_date DATE NOT NULL,
+  branch VARCHAR(191) NOT NULL DEFAULT 'فرع الإسكندرية',
+  rep_name VARCHAR(191) NULL,
+  notes TEXT NULL,
+  created_by VARCHAR(36) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_returns_branch (branch),
+  KEY idx_returns_date (return_date),
+  KEY idx_returns_product (product_id),
+  KEY idx_returns_invoice (invoice_id)
 );
 
 CREATE TABLE IF NOT EXISTS system_settings (

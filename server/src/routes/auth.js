@@ -100,9 +100,14 @@ router.post("/verify-delete-password", requireAuth, async (req, res) => {
   return res.json({ ok: true });
 });
 
+const ALLOWED_ROLES = ["admin", "sales_rep", "customer_service", "warehouse_keeper"];
+
 router.post("/signup", async (req, res) => {
   const { email, password, options } = req.body || {};
   const fullName = options?.data?.full_name || "";
+  const role = options?.data?.role || "admin";
+  const branchId = options?.data?.branch_id || "1";
+  const phone = options?.data?.phone || "";
 
   if (!email || !password) {
     return res.status(400).json({ error: "البيانات المطلوبة غير مكتملة" });
@@ -113,18 +118,24 @@ router.post("/signup", async (req, res) => {
     return res.status(403).json({ error: "إنشاء الحساب غير متاح من الواجهة الحالية" });
   }
 
+  const chosenRole = ALLOWED_ROLES.includes(role) ? role : "admin";
+
   try {
     const user = await createUser({
       email,
       password,
       fullName,
-      roles: ["admin"],
+      branchId,
+      phone,
+      roles: [chosenRole],
     });
 
-    await query(
-      "INSERT INTO system_settings (`key`, `value`) VALUES ('delete_password', ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)",
-      [password]
-    );
+    if (chosenRole === "admin") {
+      await query(
+        "INSERT INTO system_settings (`key`, `value`) VALUES ('delete_password', ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)",
+        [password]
+      );
+    }
 
     const token = signToken(user);
     return res.json({ token, user });
@@ -153,6 +164,52 @@ router.post("/create-rep", requireAdmin, async (req, res) => {
     return res.json({ success: true, user });
   } catch (error) {
     return res.status(400).json({ error: error.message || "تعذر إنشاء المندوب" });
+  }
+});
+
+router.post("/create-warehouse-keeper", requireAdmin, async (req, res) => {
+  const { email, password, full_name, branch_id, phone } = req.body || {};
+
+  if (!email || !password || !full_name) {
+    return res.status(400).json({ error: "البيانات المطلوبة غير مكتملة" });
+  }
+
+  try {
+    const user = await createUser({
+      email,
+      password,
+      fullName: full_name,
+      branchId: branch_id || "1",
+      phone: phone || "",
+      roles: ["warehouse_keeper"],
+    });
+
+    return res.json({ success: true, user });
+  } catch (error) {
+    return res.status(400).json({ error: error.message || "تعذر إنشاء أمين المخزن" });
+  }
+});
+
+router.post("/create-customer-service", requireAdmin, async (req, res) => {
+  const { email, password, full_name, branch_id, phone } = req.body || {};
+
+  if (!email || !password || !full_name) {
+    return res.status(400).json({ error: "البيانات المطلوبة غير مكتملة" });
+  }
+
+  try {
+    const user = await createUser({
+      email,
+      password,
+      fullName: full_name,
+      branchId: branch_id || "1",
+      phone: phone || "",
+      roles: ["customer_service"],
+    });
+
+    return res.json({ success: true, user });
+  } catch (error) {
+    return res.status(400).json({ error: error.message || "تعذر إنشاء حساب خدمة العملاء" });
   }
 });
 

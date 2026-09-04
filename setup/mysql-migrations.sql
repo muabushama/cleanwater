@@ -66,3 +66,17 @@ CREATE TABLE IF NOT EXISTS inventory_categories (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_inv_cat_parent (parent_id)
 );
+
+-- Role: أمين مخزن (warehouse_keeper)
+ALTER TABLE user_roles MODIFY COLUMN role ENUM('admin', 'sales_rep', 'customer_service', 'warehouse_keeper') NOT NULL;
+
+-- العميل: نوع (مبيعات / صيانة)
+ALTER TABLE customers ADD COLUMN customer_type VARCHAR(50) NOT NULL DEFAULT 'sales';
+
+-- الفواتير: ربط بالحسابات والمالية (تاريخ الاستحقاق، حالة التسليم، ملاحظات)
+ALTER TABLE invoices ADD COLUMN due_date DATE NULL;
+ALTER TABLE invoices ADD COLUMN delivery_status VARCHAR(50) NOT NULL DEFAULT 'pending';
+ALTER TABLE invoices ADD COLUMN notes TEXT NULL;
+ALTER TABLE invoices ADD KEY idx_invoices_due_date (due_date);
+ALTER TABLE invoices ADD KEY idx_invoices_delivery_status (delivery_status);
+ALTER TABLE invoices ADD KEY idx_invoices_status (status);

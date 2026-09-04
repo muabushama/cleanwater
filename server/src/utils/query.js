@@ -17,6 +17,12 @@ function buildWhere(filters = []) {
       continue;
     }
 
+    if (filter.operator === "neq") {
+      clauses.push(`\`${filter.field}\` <> ?`);
+      values.push(filter.value);
+      continue;
+    }
+
     if (filter.operator === "like") {
       const val = filter.value != null ? String(filter.value) : "";
       clauses.push(`\`${filter.field}\` LIKE ?`);

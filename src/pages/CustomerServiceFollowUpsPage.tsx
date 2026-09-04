@@ -5,9 +5,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { useUserBranch } from '@/hooks/useUserBranch';
+import { branchDbValuesForUiBranch } from '@/lib/branchFilters';
 import { formatEGP } from '@/data/demo-data';
+import { invoiceCustomerCredit, invoiceDebtRemaining } from '@/lib/invoiceBalance';
 
-type Invoice = { id: string; customer_name: string; remaining: number; status: string; date: string };
+const formatDateDisplay = (v: any) => { const s = String(v || ''); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : s; };
+
+type Invoice = { id: string; customer_name: string; amount: number; paid: number; remaining: number; status: string; date: string };
 type Maintenance = { id: string; customer_name: string; next_date: string; type: string; status: string };
 type WorkOrder = { id: string; customer_name: string; order_code: string; visit_date: string; status: string };
 
@@ -21,10 +25,11 @@ export default function CustomerServiceFollowUpsPage() {
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
+      const bv = branchDbValuesForUiBranch(branch);
       const [invoicesRes, maintenanceRes, workOrdersRes] = await Promise.all([
-        supabase.from('invoices').select('*').eq('branch', branch).order('created_at', { ascending: false }).limit(50),
-        supabase.from('maintenance').select('*').eq('branch', branch).order('next_date', { ascending: true }).limit(50),
-        supabase.from('work_orders').select('*').eq('branch', branch).order('created_at', { ascending: false }).limit(50),
+        supabase.from('invoices').select('*').in('branch', bv).order('created_at', { ascending: false }).limit(50),
+        supabase.from('maintenance').select('*').in('branch', bv).order('next_date', { ascending: true }).limit(50),
+        supabase.from('work_orders').select('*').in('branch', bv).order('created_at', { ascending: false }).limit(50),
       ]);
 
       setInvoices((invoicesRes.data || []) as Invoice[]);
@@ -76,8 +81,12 @@ export default function CustomerServiceFollowUpsPage() {
                     <Badge variant={invoice.status === 'partial' ? 'secondary' : 'outline'}>{invoice.status}</Badge>
                   </div>
                   <div className="mt-2 text-xs text-muted-foreground flex items-center justify-between">
-                    <span>{invoice.date}</span>
-                    <span>{formatEGP(invoice.remaining || 0)}</span>
+                    <span>{formatDateDisplay(invoice.date)}</span>
+                    <span className={invoiceCustomerCredit(invoice.amount, invoice.paid) > 0 ? 'text-emerald-700 font-medium' : ''}>
+                      {invoiceCustomerCredit(invoice.amount, invoice.paid) > 0
+                        ? `رصيد ${formatEGP(invoiceCustomerCredit(invoice.amount, invoice.paid))}`
+                        : `متبقي ${formatEGP(invoiceDebtRemaining(invoice.amount, invoice.paid))}`}
+                    </span>
                   </div>
                 </div>
               ))}
@@ -98,7 +107,7 @@ export default function CustomerServiceFollowUpsPage() {
                     <Badge variant="outline">{item.status}</Badge>
                   </div>
                   <div className="mt-2 text-xs text-muted-foreground flex items-center justify-between">
-                    <span>{item.next_date}</span>
+                    <span>{formatDateDisplay(item.next_date)}</span>
                     <span>{item.type}</span>
                   </div>
                 </div>
@@ -121,7 +130,7 @@ export default function CustomerServiceFollowUpsPage() {
                   </div>
                   <div className="mt-2 text-xs text-muted-foreground flex items-center justify-between">
                     <span>{item.order_code}</span>
-                    <span>{item.visit_date}</span>
+                    <span>{formatDateDisplay(item.visit_date)}</span>
                   </div>
                 </div>
               ))}

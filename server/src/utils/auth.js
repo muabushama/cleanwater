@@ -75,6 +75,10 @@ function isRep(user) {
   return !!user && Array.isArray(user.roles) && user.roles.includes("sales_rep");
 }
 
+function isWarehouseKeeper(user) {
+  return !!user && Array.isArray(user.roles) && user.roles.includes("warehouse_keeper");
+}
+
 module.exports = {
   signToken,
   verifyToken,
@@ -83,4 +87,5 @@ module.exports = {
   getUserWithProfile,
   isAdmin,
   isRep,
+  isWarehouseKeeper,
 };

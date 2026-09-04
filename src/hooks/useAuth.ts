@@ -9,6 +9,7 @@ export function useAuth() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [isRep, setIsRep] = useState(false);
   const [isCustomerService, setIsCustomerService] = useState(false);
+  const [isWarehouseKeeper, setIsWarehouseKeeper] = useState(false);
   const [profile, setProfile] = useState<{ full_name: string; branch_id: string } | null>(null);
 
   useEffect(() => {
@@ -17,21 +18,24 @@ export function useAuth() {
       setUser(nextSession?.user ?? null);
 
       if (nextSession?.user) {
-        const [profileRes, adminRes, repRes, csRes] = await Promise.all([
+        const [profileRes, adminRes, repRes, csRes, wkRes] = await Promise.all([
           supabase.from('profiles').select('full_name, branch_id').eq('id', nextSession.user.id).single(),
           supabase.from('user_roles').select('role').eq('user_id', nextSession.user.id).eq('role', 'admin').maybeSingle(),
           supabase.from('user_roles').select('role').eq('user_id', nextSession.user.id).eq('role', 'sales_rep').maybeSingle(),
           supabase.from('user_roles').select('role').eq('user_id', nextSession.user.id).eq('role', 'customer_service').maybeSingle(),
+          supabase.from('user_roles').select('role').eq('user_id', nextSession.user.id).eq('role', 'warehouse_keeper').maybeSingle(),
         ]);
         if (profileRes.data) setProfile(profileRes.data);
         setIsAdmin(!!adminRes.data);
         setIsRep(!!repRes.data);
-        setIsCustomerService(!!csRes.data || (!adminRes.data && !repRes.data));
+        setIsCustomerService(!!csRes.data);
+        setIsWarehouseKeeper(!!wkRes.data);
       } else {
         setProfile(null);
         setIsAdmin(false);
         setIsRep(false);
         setIsCustomerService(false);
+        setIsWarehouseKeeper(false);
       }
 
       setLoading(false);
@@ -57,7 +61,7 @@ export function useAuth() {
     email: string,
     password: string,
     fullName: string,
-    role: 'admin' | 'sales_rep' | 'customer_service',
+    role: 'admin' | 'sales_rep' | 'customer_service' | 'warehouse_keeper',
     branchId: string,
     phone?: string,
   ) => {
@@ -74,5 +78,5 @@ export function useAuth() {
     return { error };
   };
 
-  return { user, session, loading, isAdmin, isRep, isCustomerService, profile, signIn, signUp, signOut };
+  return { user, session, loading, isAdmin, isRep, isCustomerService, isWarehouseKeeper, profile, signIn, signUp, signOut };
 }

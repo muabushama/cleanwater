@@ -1,17 +1,23 @@
 import { motion } from 'framer-motion';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { workOrders as demoWorkOrders, formatEGP, companyInfo } from '@/data/demo-data';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Plus, Eye, Printer, X, Truck, Edit } from 'lucide-react';
+import { Plus, Eye, Printer, X, Truck, Edit, Search, Trash2 } from 'lucide-react';
 import logo from '@/assets/logo.png';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { AddDialog } from '@/components/AddDialog';
+import { Input } from '@/components/ui/input';
+import { WorkOrderAddDialog, type CustomerForSuggest } from '@/components/WorkOrderAddDialog';
+import { joinWorkOrderPhoneFields, splitWorkOrderPhoneFields, workOrderPhonesForPrint } from '@/lib/workOrderPrintPhones';
 import { useToast } from '@/hooks/use-toast';
 import { useUserBranch } from '@/hooks/useUserBranch';
+import { branchDbValuesForUiBranch, canonicalBranchForSave } from '@/lib/branchFilters';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { formatDateDayMonthYear } from '@/lib/dateDisplay';
+import { promptDeletePassword } from '@/lib/deletePassword';
 
 interface WorkOrder {
   id: string;
@@ -41,7 +47,25 @@ interface WorkOrder {
   delivery_status?: string;
 }
 
+const formatDateDisplay = (v: any) => formatDateDayMonthYear(v);
+
 const ensureHttpUrl = (url: string) => (/^https?:\/\//i.test(url) ? url : `https://${url}`);
+
+const escapeHtml = (s: string) =>
+  String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const printAssetUrl = (asset: string) => {
+  const u = String(asset || '');
+  if (!u) return u;
+  if (u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:')) return u;
+  if (u.startsWith('/')) return `${window.location.origin}${u}`;
+  return u;
+};
 
 const openExternalLink = (url: string) => {
   const newWindow = window.open(url, '_blank', 'noopener,noreferrer');
@@ -56,72 +80,261 @@ const openExternalLink = (url: string) => {
   }
 };
 
-function WorkOrderDetail({ wo, onClose }: { wo: WorkOrder; onClose: () => void }) {
+type ProductLine = { product_id?: string; product_name: string; quantity: number; unit_price: number; line_total: number };
+
+const parseProductLinesFromValues = (values: Record<string, string>): ProductLine[] => {
+  try {
+    const parsed = JSON.parse(String(values.product_lines || '[]'));
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((x: any) => {
+        const quantity = Math.max(1, Number(x.quantity) || 1);
+        const unitPrice = Math.max(0, Number(x.unit_price) || 0);
+        const name = String(x.product_name || '').trim();
+        if (!name) return null;
+        return {
+          product_id: x.product_id ? String(x.product_id) : undefined,
+          product_name: name,
+          quantity,
+          unit_price: unitPrice,
+          line_total: quantity * unitPrice,
+        };
+      })
+      .filter(Boolean) as ProductLine[];
+  } catch {
+    return [];
+  }
+};
+
+const buildWorkOrderItemsFromLines = (lines: ProductLine[]) =>
+  lines.map((ln) => ({ description: `المنتج: ${ln.product_name} × ${ln.quantity}`, value: ln.line_total }));
+
+const extractProductLinesFromItems = (items?: { description: string; value: number }[]): ProductLine[] =>
+  (Array.isArray(items) ? items : [])
+    .map((it) => {
+      const d = String(it.description || '').trim();
+      const m = d.match(/^المنتج:\s*(.*?)\s*×\s*([0-9]+)$/);
+      if (!m) return null;
+      const qty = Math.max(1, Number(m[2]) || 1);
+      const total = Math.max(0, Number(it.value) || 0);
+      return {
+        product_name: String(m[1] || '').trim(),
+        quantity: qty,
+        unit_price: qty > 0 ? total / qty : total,
+        line_total: total,
+      };
+    })
+    .filter(Boolean) as ProductLine[];
+
+const productLineSignature = (ln: ProductLine) =>
+  `${ln.product_id || ''}|${ln.product_name}|${ln.quantity}|${ln.unit_price}|${ln.line_total}`;
+
+const productLinesUnchanged = (a: ProductLine[], b: ProductLine[]) => {
+  if (a.length !== b.length) return false;
+  const sigA = a.map(productLineSignature).sort().join(';;');
+  const sigB = b.map(productLineSignature).sort().join(';;');
+  return sigA === sigB;
+};
+
+const computeWorkOrderTotal = (wo: WorkOrder) => {
+  const saved = Number(wo.total) || 0;
+  if (saved > 0) return saved;
+  const transport = Number(wo.transport_cost) || 0;
+  const itemsSum = (Array.isArray(wo.items) ? wo.items : []).reduce((s, i) => s + (Number(i.value) || 0), 0);
+  return transport + itemsSum;
+};
+
+const extractProductNameFromItemDescription = (description?: string): string => {
+  const d = String(description || '').trim();
+  const m = d.match(/^المنتج:\s*(.*?)\s*×\s*([0-9]+)$/);
+  return m ? String(m[1] || '').trim() : '';
+};
+
+function WorkOrderDetail({
+  wo,
+  onClose,
+  customers,
+}: {
+  wo: WorkOrder;
+  onClose: () => void;
+  customers: CustomerForSuggest[];
+}) {
+  const printRef = useRef<HTMLDivElement>(null);
+  const computedTotal = computeWorkOrderTotal(wo);
+  const displayPhones = workOrderPhonesForPrint(
+    { phone: wo.phone, customer_name: wo.customer_name },
+    customers.map((c) => ({ name: c.name, phone1: c.phone1, phone2: c.phone2, whatsapp: c.whatsapp })),
+  );
+  const handlePrint = () => {
+    const w = window.open('', '_blank');
+    if (!w) {
+      window.print();
+      return;
+    }
+    const logoSrc = printAssetUrl(typeof logo === 'string' ? logo : String(logo));
+    const tableRows = (Array.isArray(wo.items) ? wo.items : [])
+      .map(
+        (item) =>
+          `<tr><td class="c1">${escapeHtml(item.description || '-')}</td><td class="c2">${escapeHtml(formatEGP(Number(item.value) || 0))}</td></tr>`,
+      )
+      .join('');
+    const transportCost = Number(wo.transport_cost) || 0;
+    const sheet = `
+      <div class="work-form">
+        <div class="head">
+          <div class="logo-wrap">
+            <img src="${escapeHtml(logoSrc)}" alt="logo" />
+            <div class="small">
+              <div class="brand">كلين ووتر</div>
+              <div>لتكنولوجيا معالجة مياه الشرب</div>
+              <div>خدمة العملاء: ${escapeHtml(companyInfo.customerService.join(' - '))}</div>
+            </div>
+          </div>
+          <div class="title-wrap">
+            <div class="title">أمر شغل</div>
+            <div class="code">رقم الأمر: ${escapeHtml(wo.order_code || '-')}</div>
+          </div>
+        </div>
+        <table class="meta"><tbody>
+          <tr><td><b>اسم العميل:</b> ${escapeHtml(wo.customer_name || '-')}</td><td class="phone-cell" dir="ltr"><b>التليفون:</b> ${escapeHtml(displayPhones)}</td><td><b>التاريخ:</b> ${escapeHtml(formatDateDisplay(wo.visit_date))}</td></tr>
+          <tr><td><b>العنوان:</b> ${escapeHtml(wo.address || '-')}</td><td><b>المنطقة:</b> ${escapeHtml(wo.region || '-')}</td><td><b>الفني:</b> ${escapeHtml(wo.technician || '-')}</td></tr>
+          <tr><td><b>المنتج:</b> ${escapeHtml(wo.product_name || '-')}</td><td><b>حالة الضمان:</b> ${escapeHtml(wo.warranty_status || '-')}</td><td><b>لينك الموقع:</b> ${escapeHtml(wo.location_url || '-')}</td></tr>
+        </tbody></table>
+        <table class="items"><thead><tr><th>البيان</th><th>القيمة</th></tr></thead><tbody>
+          ${tableRows}
+          ${transportCost > 0 ? `<tr><td class="c1"><b>مواصلات</b></td><td class="c2">${escapeHtml(formatEGP(transportCost))}</td></tr>` : ''}
+          <tr><td class="c1"><b>الإجمالي</b></td><td class="c2"><b>${escapeHtml(formatEGP(computedTotal))}</b></td></tr>
+        </tbody></table>
+        <div class="notes"><b>ملاحظات:</b> ${escapeHtml(wo.notes || '-')}</div>
+        <div class="signs">
+          <div><p>خدمة العملاء</p><span>التوقيع</span></div>
+          <div><p>توقيع العميل</p><span>التوقيع</span></div>
+          <div><p>توقيع الفني</p><span>التوقيع</span></div>
+        </div>
+        <div class="foot">
+          <p>${escapeHtml(companyInfo.branches.join(' | '))}</p>
+          <p>خدمة العملاء: ${escapeHtml(companyInfo.customerService.join(' - '))}</p>
+          <p>الخط الساخن: ${escapeHtml(companyInfo.hotline)} | إدارة الفنيين: ${escapeHtml(companyInfo.techManagement)}</p>
+        </div>
+      </div>`;
+    w.document.write(`<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"/><title>أمر شغل ${escapeHtml(wo.order_code)}</title>
+      <style>
+        @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
+        * { box-sizing: border-box; font-family: Cairo, Tahoma, sans-serif; }
+        body { margin: 0; padding: 6px; color: #000; font-weight: 600; font-size: 15px; }
+        .wo-copy { height: calc(50vh - 7mm); overflow: hidden; display: flex; align-items: flex-start; justify-content: center; }
+        .work-form { width: 100%; border: 2px solid #000; padding: 10px; transform: scale(0.92); transform-origin: top center; }
+        .head { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; }
+        .logo-wrap { display:flex; align-items:center; gap:12px; }
+        .logo-wrap img { width: 88px; height: 88px; border: 2px solid #000; padding: 3px; object-fit: contain; }
+        .small { font-size: 14px; line-height: 1.5; font-weight: 700; color: #000; }
+        .brand { font-size: 20px; font-weight: 900; line-height: 1.15; color: #000; }
+        .title-wrap { text-align:center; }
+        .title { border:2px solid #000; padding:4px 24px; font-size:26px; font-weight:900; color: #000; }
+        .code { font-size: 15px; margin-top:4px; font-weight: 800; color: #000; }
+        table { width:100%; border-collapse:collapse; font-size: 15px; font-weight: 700; color: #000; }
+        .meta td, .items td, .items th { border:1px solid #000; padding:6px 10px; }
+        .meta .phone-cell { font-size: 16px; font-weight: 800; letter-spacing: 0.02em; unicode-bidi: plaintext; white-space: normal; word-break: break-word; }
+        .items th { font-weight:700; text-align:right; }
+        .items .c2 { width:120px; text-align:center; }
+        .notes { border:1px solid #000; margin-top:5px; padding:6px 10px; font-size: 14px; min-height:28px; }
+        .signs { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; text-align:center; margin-top:8px; font-size:13px; }
+        .signs p { margin:0 0 22px; font-weight:600; }
+        .signs span { display:block; border-top:1px dashed #000; padding-top:3px; }
+        .foot { border-top:1px solid #000; margin-top:6px; padding-top:4px; text-align:center; font-size:11px; line-height:1.45; }
+        .copy-separator { border: none; border-top: 2px dashed #999; margin: 6px 0; }
+        @media print { @page { margin: 8mm; } body { padding: 0; } .wo-copy { page-break-inside: avoid; } }
+      </style></head><body>
+      <div class="wo-copy">${sheet}</div>
+      <hr class="copy-separator" />
+      <div class="wo-copy">${sheet}</div>
+      </body></html>`);
+    w.document.close();
+    setTimeout(() => {
+      w.print();
+      w.close();
+    }, 300);
+  };
+
   return (
     <div className="max-w-4xl mx-auto bg-card print:shadow-none" dir="rtl">
-      <div className="flex items-start justify-between border-b-2 border-foreground/20 pb-4 mb-4">
-        <div className="flex items-center gap-3">
-          <img src={logo} alt="Clean Water" className="w-16 h-16 object-contain" />
-          <div>
-            <h1 className="text-xl font-bold text-primary">كلين ووتر</h1>
-            <p className="text-xs text-muted-foreground">لتكنولوجيا معالجة مياه الشرب</p>
+      <div ref={printRef} className="print-area">
+      <div className="work-form border-2 border-black p-2 bg-white text-black">
+      <div className="flex items-start justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <img src={logo} alt="Clean Water" className="h-24 w-24 shrink-0 object-contain border-2 border-black p-1" />
+          <div className="text-xs leading-5">
+            <div className="font-bold text-lg leading-tight">كلين ووتر</div>
+            <div>لتكنولوجيا معالجة مياه الشرب</div>
+            <div>خدمة العملاء: {companyInfo.customerService.join(' - ')}</div>
           </div>
         </div>
         <div className="text-center">
-          <h2 className="text-2xl font-bold gradient-primary text-primary-foreground px-8 py-2 rounded-lg">أمر شغل</h2>
+          <div className="border-2 border-black px-6 py-1 text-lg font-bold">أمر شغل</div>
+          <div className="text-[10px] mt-1">رقم الأمر: {wo.order_code}</div>
         </div>
-        <Button variant="ghost" size="icon" onClick={onClose} className="print:hidden"><X className="h-4 w-4" /></Button>
+        <Button variant="ghost" size="icon" onClick={onClose} className="print:hidden shrink-0"><X className="h-4 w-4" /></Button>
       </div>
 
-      <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm mb-4">
-        <div className="flex gap-2"><span className="font-semibold text-muted-foreground min-w-[80px]">كود الأمر</span><span className="font-medium">{wo.order_code}</span></div>
-        <div className="flex gap-2"><span className="font-semibold text-muted-foreground min-w-[80px]">العميل</span><span className="font-bold">{wo.customer_name}</span></div>
-        <div className="flex gap-2 col-span-2"><span className="font-semibold text-muted-foreground min-w-[80px]">العنوان</span><span className="text-xs leading-relaxed">{wo.address}</span></div>
-        {wo.location_url && (
-          <div className="flex gap-2 col-span-2"><span className="font-semibold text-muted-foreground min-w-[80px]">الموقع</span><button className="text-xs text-primary underline cursor-pointer bg-transparent border-none p-0" onClick={() => openExternalLink(ensureHttpUrl(wo.location_url))}>فتح لينك اللوكيشن</button></div>
-        )}
-        <div className="flex gap-2"><span className="font-semibold text-muted-foreground min-w-[80px]">الهاتف</span><span>{wo.phone}</span></div>
-        <div className="flex gap-2"><span className="font-semibold text-muted-foreground min-w-[80px]">المنطقة</span><span>{wo.region}</span></div>
-        <div className="flex gap-2"><span className="font-semibold text-muted-foreground min-w-[80px]">تاريخ الزيارة</span><span className="font-bold">{wo.visit_date}</span></div>
-        <div className="flex gap-2"><span className="font-semibold text-muted-foreground min-w-[80px]">الفني</span><span className="font-medium">{wo.technician}</span></div>
-        {wo.warranty_status && (
-          <div className="flex gap-2"><span className="font-semibold text-muted-foreground min-w-[80px]">الضمان</span>
-            <Badge variant={wo.warranty_status === 'ساري' ? 'default' : 'destructive'} className="text-[10px]">{wo.warranty_status}</Badge>
-          </div>
-        )}
+      <div className="border border-black text-sm mb-2">
+        <div className="grid grid-cols-3">
+          <div className="p-1.5 border-l border-black"><span className="font-semibold">اسم العميل:</span> {wo.customer_name}</div>
+          <div className="p-1.5 border-l border-black" dir="ltr"><span className="font-bold">التليفون:</span> <span className="font-extrabold text-black tracking-wide">{displayPhones}</span></div>
+          <div className="p-1.5"><span className="font-semibold">التاريخ:</span> {formatDateDisplay(wo.visit_date)}</div>
+        </div>
+        <div className="grid grid-cols-3 border-t border-black">
+          <div className="p-1.5 border-l border-black"><span className="font-semibold">العنوان:</span> {wo.address || '-'}</div>
+          <div className="p-1.5 border-l border-black"><span className="font-semibold">المنطقة:</span> {wo.region || '-'}</div>
+          <div className="p-1.5"><span className="font-semibold">الفني:</span> {wo.technician || '-'}</div>
+        </div>
+        <div className="grid grid-cols-3 border-t border-black">
+          <div className="p-1.5 border-l border-black"><span className="font-semibold">المنتج:</span> {wo.product_name || '-'}</div>
+          <div className="p-1.5 border-l border-black"><span className="font-semibold">حالة الضمان:</span> {wo.warranty_status || '-'}</div>
+          <div className="p-1.5"><span className="font-semibold">لينك الموقع:</span> {wo.location_url || '-'}</div>
+        </div>
       </div>
 
-      {wo.notes && (
-        <div className="text-sm mb-4 p-2 bg-accent/50 rounded-lg">
-          <span className="font-semibold text-muted-foreground">ملاحظات: </span><span>{wo.notes}</span>
-        </div>
-      )}
-
-      <table className="w-full text-sm border border-border mb-4">
-        <thead><tr className="bg-muted/70"><th className="border border-border p-2 text-right font-semibold">البيان</th><th className="border border-border p-2 text-center font-semibold w-28">القيمة</th></tr></thead>
+      <table className="w-full text-sm border border-black mb-2">
+        <thead>
+          <tr>
+            <th className="border border-black p-1.5 text-right font-semibold">البيان</th>
+            <th className="border border-black p-1.5 text-center font-semibold w-28">القيمة</th>
+          </tr>
+        </thead>
         <tbody>
           {wo.items.map((item, i) => (
-            <tr key={i} className="hover:bg-muted/30"><td className="border border-border p-2">{item.description}</td><td className="border border-border p-2 text-center font-medium">{item.value}</td></tr>
+            <tr key={i}>
+              <td className="border border-black p-1.5">{item.description}</td>
+              <td className="border border-black p-1.5 text-center font-medium">{formatEGP(Number(item.value) || 0)}</td>
+            </tr>
           ))}
-          <tr className="bg-muted/30"><td className="border border-border p-2 font-semibold">مواصلات</td><td className="border border-border p-2 text-center">{wo.transport_cost}</td></tr>
-          <tr className="bg-primary/10"><td className="border border-border p-2 font-bold text-primary">الإجمالي</td><td className="border border-border p-2 text-center font-bold text-primary">{wo.total}</td></tr>
+          {(Number(wo.transport_cost) || 0) > 0 && (
+            <tr><td className="border border-black p-1.5 font-semibold">مواصلات</td><td className="border border-black p-1.5 text-center">{formatEGP(Number(wo.transport_cost) || 0)}</td></tr>
+          )}
+          <tr><td className="border border-black p-1.5 font-bold">الإجمالي</td><td className="border border-black p-1.5 text-center font-bold">{formatEGP(computedTotal)}</td></tr>
         </tbody>
       </table>
 
-      <div className="grid grid-cols-3 gap-4 text-center text-xs text-muted-foreground pt-4 border-t border-border">
-        <div><p className="font-semibold mb-8">خدمة العملاء</p><div className="border-t border-dashed border-border pt-1">التوقيع</div></div>
-        <div><p className="font-semibold mb-8">توقيع العميل</p><div className="border-t border-dashed border-border pt-1">التوقيع</div></div>
-        <div><p className="font-semibold mb-8">توقيع الفنى</p><div className="border-t border-dashed border-border pt-1">التوقيع</div></div>
+      <div className="border border-black text-[13px] mb-2 p-1.5">
+        <span className="font-semibold">ملاحظات:</span> {wo.notes || '-'}
       </div>
 
-      <div className="mt-6 pt-3 border-t border-border text-[10px] text-muted-foreground text-center space-y-1">
+      <div className="grid grid-cols-3 gap-2 text-center text-[11px] mt-3">
+        <div><p className="font-semibold mb-7">خدمة العملاء</p><div className="border-t border-dashed border-black pt-1">التوقيع</div></div>
+        <div><p className="font-semibold mb-7">توقيع العميل</p><div className="border-t border-dashed border-black pt-1">التوقيع</div></div>
+        <div><p className="font-semibold mb-7">توقيع الفني</p><div className="border-t border-dashed border-black pt-1">التوقيع</div></div>
+      </div>
+
+      <div className="mt-2 pt-2 border-t border-black text-[9px] text-center space-y-1">
         <p>{companyInfo.branches.join(' | ')}</p>
         <p>خدمة العملاء: {companyInfo.customerService.join(' - ')}</p>
         <p>الخط الساخن: {companyInfo.hotline} | إدارة الفنيين: {companyInfo.techManagement}</p>
       </div>
+      </div>
 
       <div className="mt-4 flex justify-center print:hidden">
-        <Button onClick={() => window.print()} className="gap-2"><Printer className="h-4 w-4" /> طباعة أمر الشغل</Button>
+        <Button onClick={handlePrint} className="gap-2"><Printer className="h-4 w-4" /> طباعة (نسختان)</Button>
+      </div>
       </div>
     </div>
   );
@@ -137,19 +350,18 @@ const deliveryStatusLabel = (s?: string) => {
   }
 };
 
-const getWorkOrderFields = (reps: { id: string; full_name: string }[], currentBranch: string, areas: { id: string; name: string }[] = []) => {
+const getWorkOrderFields = (reps: { id: string; full_name: string }[], currentBranch: string, areas: { id: string; name: string }[] = [], nextOrderCode?: string) => {
   const base = [
-  { name: 'order_code', label: 'كود الأمر', required: true },
+  { name: 'order_code', label: 'كود الأمر (تسلسل تلقائي)', required: true, defaultValue: nextOrderCode || '' },
   { name: 'customer_name', label: 'اسم العميل', required: true },
   { name: 'phone', label: 'الهاتف', required: true },
   { name: 'address', label: 'العنوان', required: true },
   { name: 'location_url', label: 'لينك اللوكيشن (Google Maps)' },
   { name: 'region', label: 'المنطقة (نص حر)' },
-  ...(areas.length > 0 ? [{ name: 'area_id', label: 'المنطقة (من القائمة)', type: 'select' as const, options: [{ value: '', label: 'بدون' }, ...areas.map(a => ({ value: a.id, label: a.name }))] }] : []),
+  ...(areas.length > 0 ? [{ name: 'area_id', label: 'المنطقة (من القائمة)', type: 'select' as const, options: [{ value: 'none', label: 'بدون' }, ...areas.map(a => ({ value: a.id, label: a.name }))], defaultValue: 'none' }] : []),
   { name: 'product_name', label: 'المنتج', required: true },
-  { name: 'price1', label: 'سعر 1', type: 'number' as const, defaultValue: '0' },
-  { name: 'price2', label: 'سعر 2', type: 'number' as const, defaultValue: '0' },
-  { name: 'price3', label: 'سعر 3', type: 'number' as const, defaultValue: '0' },
+  { name: 'transport_cost', label: 'تكلفة المواصلات', type: 'number' as const, defaultValue: '0' },
+  { name: 'extra_products', label: 'منتجات إضافية (كل منتج في سطر)', type: 'textarea' as const },
   { name: 'assigned_rep', label: 'المندوب المسؤول', type: 'select' as const, options: [
     { value: 'none', label: 'بدون مندوب' },
     ...reps.map(r => ({ value: r.id, label: r.full_name })),
@@ -175,8 +387,16 @@ const getWorkOrderFields = (reps: { id: string; full_name: string }[], currentBr
   return base;
 };
 
-interface WorkOrdersPageProps { embedded?: boolean }
-export default function WorkOrdersPage({ embedded }: WorkOrdersPageProps) {
+interface WorkOrdersPageProps {
+  embedded?: boolean;
+  /** عند العرض من محطة: تصفية أوامر العمل لنفس اسم عميل المحطة */
+  customerNameFilter?: string;
+  /** إذا لم يُربط عميل بالمحطة: لا تعرض أوامر (بدل كل الأوامر) */
+  strictEmptyEmbedded?: boolean;
+  /** تعبئة مسبقة لنموذج أمر الشغل (مثلاً من بيانات محطة) */
+  prefillCustomer?: CustomerForSuggest | null;
+}
+export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmptyEmbedded, prefillCustomer }: WorkOrdersPageProps) {
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [selectedWO, setSelectedWO] = useState<WorkOrder | null>(null);
   const [loading, setLoading] = useState(true);
@@ -184,14 +404,21 @@ export default function WorkOrdersPage({ embedded }: WorkOrdersPageProps) {
   const [editOpen, setEditOpen] = useState(false);
   const [editingWO, setEditingWO] = useState<WorkOrder | null>(null);
   const [saving, setSaving] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
   const [reps, setReps] = useState<{ id: string; full_name: string }[]>([]);
   const [areas, setAreas] = useState<{ id: string; name: string }[]>([]);
+  const [customers, setCustomers] = useState<{ id: string; name: string; phone1: string; phone2?: string; whatsapp?: string; address: string; region?: string; area_id?: string | null }[]>([]);
+  const [products, setProducts] = useState<{ id: string; name: string; price1: number; price2: number; price3: number; stock?: number; sku_code?: string | null; barcode?: string | null }[]>([]);
+  const [initialCustomerForOrder, setInitialCustomerForOrder] = useState<{ id: string; name: string; phone1: string; phone2?: string; whatsapp?: string; address: string; region?: string; area_id?: string | null } | null>(null);
   const [assigningId, setAssigningId] = useState<string | null>(null);
   const { toast } = useToast();
   const { branch } = useUserBranch();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   const fetchWorkOrders = async () => {
-    const { data } = await supabase.from('work_orders').select('*').eq('branch', branch).order('created_at', { ascending: false });
+    const bv = branchDbValuesForUiBranch(branch);
+    const { data } = await supabase.from('work_orders').select('*').in('branch', bv).order('created_at', { ascending: false });
     if (data && data.length > 0) {
       setWorkOrders(data.map((wo: any) => ({
         ...wo,
@@ -240,11 +467,37 @@ export default function WorkOrdersPage({ embedded }: WorkOrdersPageProps) {
     setSelectedWO(null);
     fetchWorkOrders();
     fetchReps();
-    supabase.from('areas').select('id,name').eq('branch', branch).then(({ data }) => setAreas(Array.isArray(data) ? data : []));
+    const bv = branchDbValuesForUiBranch(branch);
+    supabase.from('areas').select('id,name').in('branch', bv).then(({ data }) => setAreas(Array.isArray(data) ? data : []));
+    supabase
+      .from('customers')
+      .select('id,name,phone1,phone2,whatsapp,address,region,area_id')
+      .in('branch', bv)
+      .limit(2000)
+      .then(({ data }) => setCustomers(Array.isArray(data) ? data : []));
+    supabase.from('products').select('id,name,price1,price2,price3,stock,sku_code,barcode').in('branch', bv).limit(2000).then(({ data }) => setProducts(Array.isArray(data) ? data : []));
   }, [branch]);
+
+  useEffect(() => {
+    const c = (location.state as { newOrderForCustomer?: typeof initialCustomerForOrder })?.newOrderForCustomer;
+    if (c) {
+      setInitialCustomerForOrder(c);
+      setAddOpen(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state]);
 
   const statusLabel = (s: string) => s === 'completed' ? 'مكتمل' : s === 'in_progress' ? 'قيد التنفيذ' : 'معلق';
   const statusVariant = (s: string) => s === 'completed' ? 'default' as const : s === 'in_progress' ? 'secondary' as const : 'outline' as const;
+
+  const productLinesWithIds = (lines: ProductLine[]) =>
+    lines.map((ln) => {
+      const productId = ln.product_id || products.find((p) => String(p.name || '').trim() === String(ln.product_name || '').trim())?.id || '';
+      return { ...ln, product_id: productId || undefined };
+    });
+
+  const currentOrderProductLines = (wo: WorkOrder) =>
+    productLinesWithIds(extractProductLinesFromItems(wo.items));
 
   const assignRep = async (orderId: string, repId: string) => {
     setAssigningId(orderId);
@@ -264,34 +517,72 @@ export default function WorkOrdersPage({ embedded }: WorkOrdersPageProps) {
     setSaving(true);
     try {
       const user = (await supabase.auth.getUser()).data.user;
-      const woBranch = values.branch || branch || 'فرع الإسكندرية';
+      const woBranch = canonicalBranchForSave(values.branch || branch);
+      const productLines = parseProductLinesFromValues(values);
+      const builtItems = buildWorkOrderItemsFromLines(productLines);
+      const transportCost = Math.max(0, Number(values.transport_cost) || 0);
+      const computedTotal = builtItems.reduce((s, i) => s + (Number(i.value) || 0), 0) + transportCost;
+      const firstLine = productLines[0];
+      const { phone2, phone3, ...valuesRest } = values as Record<string, string>;
+      const phoneJoined = joinWorkOrderPhoneFields(
+        String(valuesRest.phone || '').trim(),
+        typeof phone2 === 'string' ? phone2 : undefined,
+        typeof phone3 === 'string' ? phone3 : undefined,
+      );
       const { error } = await supabase.from('work_orders').insert({
         order_code: values.order_code,
         customer_name: values.customer_name,
-        phone: values.phone,
+        phone: phoneJoined,
         address: values.address,
         location_url: values.location_url || '',
         region: values.region || '',
-        area_id: values.area_id || null,
-        product_name: values.product_name,
+        area_id: values.area_id && values.area_id !== 'none' ? values.area_id : null,
+        product_name: firstLine?.product_name || values.product_name || '',
         visit_date: values.visit_date,
         technician: values.technician || '',
         warranty_status: values.warranty_status || 'ساري',
         status: values.status || 'pending',
         branch: woBranch,
         notes: values.notes || '',
-        items: [],
-        transport_cost: 0,
-        total: 0,
+        items: builtItems,
+        transport_cost: transportCost,
+        total: computedTotal,
         previous_visits: [],
         created_by: user?.id,
         assigned_rep: values.assigned_rep && values.assigned_rep !== 'none' ? values.assigned_rep : null,
         delivery_status: values.assigned_rep ? 'pending' : 'pending',
-        price1: Number(values.price1) || 0,
-        price2: Number(values.price2) || 0,
-        price3: Number(values.price3) || 0,
+        price1: 0,
+        price2: 0,
+        price3: 0,
       } as any);
       if (error) throw error;
+
+      // خصم المخزون تلقائياً من خطوط المنتجات داخل أمر الشغل
+      for (const ln of productLines) {
+        if (!ln.product_id) continue;
+        const prod = products.find((p) => p.id === ln.product_id);
+        if (!prod) continue;
+        const qty = Math.max(1, Number(ln.quantity) || 1);
+        const movementPayload: Record<string, unknown> = {
+          id: crypto.randomUUID(),
+          product_id: prod.id,
+          branch: woBranch,
+          type: 'sale',
+          quantity: qty,
+          reference_type: 'work_order',
+          reference_id: values.order_code || null,
+          notes: `أمر شغل ${values.order_code || ''} - ${values.customer_name || ''}`.trim(),
+        };
+        let movErr: any;
+        ({ error: movErr } = await supabase.from('stock_movements').insert(movementPayload as any));
+        if (movErr && /storage_location|Unknown column/i.test(String(movErr.message || ''))) {
+          // لا نعطل العملية إذا عمود الموقع غير موجود في بعض البيئات
+          ({ error: movErr } = await supabase.from('stock_movements').insert(movementPayload as any));
+        }
+        if (movErr) throw movErr;
+        const nextStock = Math.max(0, (Number((prod as any).stock) || 0) - qty);
+        await supabase.from('products').update({ stock: nextStock } as any).eq('id', prod.id);
+      }
 
       const maintenanceDatesRaw = (values.maintenance_dates || '').trim();
       const maintenanceDates = maintenanceDatesRaw
@@ -302,8 +593,8 @@ export default function WorkOrdersPage({ embedded }: WorkOrdersPageProps) {
         const { error: maintErr } = await supabase.from('maintenance').insert({
           id: crypto.randomUUID(),
           customer_name: values.customer_name,
-          product_name: values.product_name,
-          phone: values.phone || '',
+          product_name: firstLine?.product_name || values.product_name || '',
+          phone: phoneJoined || '',
           type: 'تغيير شمعات',
           next_date: firstDate,
           next_dates: maintenanceDates,
@@ -322,6 +613,7 @@ export default function WorkOrdersPage({ embedded }: WorkOrdersPageProps) {
         toast({ title: 'تم إضافة أمر العمل بنجاح' });
       }
       setAddOpen(false);
+      setInitialCustomerForOrder(null);
       fetchWorkOrders();
     } catch (err: any) {
       toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
@@ -334,24 +626,83 @@ export default function WorkOrdersPage({ embedded }: WorkOrdersPageProps) {
     if (!editingWO) return;
     setSaving(true);
     try {
+      const parsedLines = productLinesWithIds(parseProductLinesFromValues(values));
+      const fallbackLines = currentOrderProductLines(editingWO);
+      const productLines = parsedLines.length > 0 ? parsedLines : fallbackLines;
+      let builtItems = buildWorkOrderItemsFromLines(productLines);
+      const transportCost = Math.max(0, Number(values.transport_cost) || 0);
+      let computedTotal = builtItems.reduce((s, i) => s + (Number(i.value) || 0), 0) + transportCost;
+      if (builtItems.length === 0 && Array.isArray(editingWO.items) && editingWO.items.length > 0) {
+        builtItems = editingWO.items;
+        computedTotal = Number(editingWO.total) || computedTotal;
+      }
+      if (computedTotal <= 0 && Number(editingWO.total) > 0) {
+        computedTotal = Number(editingWO.total);
+      }
+      const firstLine = productLines[0];
+      const productsChanged = !productLinesUnchanged(productLines, fallbackLines);
+      const { phone2, phone3, ...valuesRest } = values as Record<string, string>;
+      const phoneJoined = joinWorkOrderPhoneFields(
+        String(valuesRest.phone || '').trim(),
+        typeof phone2 === 'string' ? phone2 : undefined,
+        typeof phone3 === 'string' ? phone3 : undefined,
+      );
       const { error } = await supabase.from('work_orders').update({
         order_code: values.order_code,
         customer_name: values.customer_name,
-        phone: values.phone,
+        phone: phoneJoined,
         address: values.address,
         location_url: values.location_url || '',
         region: values.region || '',
-        area_id: values.area_id || null,
-        product_name: values.product_name,
+        area_id: values.area_id && values.area_id !== 'none' ? values.area_id : null,
+        product_name: firstLine?.product_name || values.product_name || '',
         visit_date: values.visit_date,
         technician: values.technician || '',
         warranty_status: values.warranty_status || 'ساري',
         status: values.status || 'pending',
-        branch: values.branch || branch,
+        branch: canonicalBranchForSave(values.branch || branch),
         notes: values.notes || '',
+        price1: firstLine?.unit_price ?? (Number((editingWO as any).price1) || 0),
+        price2: Number((editingWO as any).price2) || 0,
+        price3: Number((editingWO as any).price3) || 0,
+        items: builtItems,
+        transport_cost: transportCost,
+        total: computedTotal,
         assigned_rep: values.assigned_rep && values.assigned_rep !== 'none' ? values.assigned_rep : null,
       } as any).eq('id', editingWO.id);
       if (error) throw error;
+
+      if (productsChanged) {
+        const oldLines = fallbackLines
+          .map((ln) => ({ product_id: ln.product_id || '', quantity: Math.max(1, Number(ln.quantity) || 1) }))
+          .filter((x) => x.product_id);
+        const qtyMap = new Map<string, number>();
+        oldLines.forEach((ln) => qtyMap.set(ln.product_id, (qtyMap.get(ln.product_id) || 0) - ln.quantity));
+        productLines
+          .filter((ln) => ln.product_id)
+          .forEach((ln) => qtyMap.set(ln.product_id, (qtyMap.get(ln.product_id) || 0) + Math.max(1, Number(ln.quantity) || 1)));
+
+        for (const [productId, deltaSold] of qtyMap.entries()) {
+          if (deltaSold === 0) continue;
+          const prod = products.find((p) => p.id === productId);
+          if (!prod) continue;
+          const current = Number((prod as any).stock) || 0;
+          const nextStock = Math.max(0, current - deltaSold);
+          const movementPayload: Record<string, unknown> = {
+            id: crypto.randomUUID(),
+            product_id: productId,
+            branch: canonicalBranchForSave(values.branch || branch),
+            type: 'adjustment',
+            quantity: -deltaSold,
+            reference_type: 'work_order_edit',
+            reference_id: values.order_code || editingWO.order_code || null,
+            notes: `تعديل أمر شغل ${values.order_code || editingWO.order_code || ''}`.trim(),
+          };
+          await supabase.from('stock_movements').insert(movementPayload as any);
+          await supabase.from('products').update({ stock: nextStock } as any).eq('id', productId);
+        }
+      }
+
       toast({ title: 'تم تعديل أمر العمل بنجاح' });
       setEditOpen(false);
       setEditingWO(null);
@@ -376,20 +727,47 @@ export default function WorkOrdersPage({ embedded }: WorkOrdersPageProps) {
     setEditOpen(true);
   };
 
+  const handleDeleteWorkOrder = async (wo: WorkOrder, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (isDemoItem(wo.id)) {
+      toast({ title: 'بيانات تجريبية', description: 'لا يمكن حذف البيانات التجريبية', variant: 'destructive' });
+      return;
+    }
+    if (!confirm(`حذف أمر العمل "${wo.order_code || wo.customer_name}"؟`)) return;
+    if (!promptDeletePassword()) return;
+    try {
+      const { error } = await supabase.from('work_orders').delete().eq('id', wo.id);
+      if (error) throw error;
+      toast({ title: 'تم حذف أمر العمل' });
+      setSelectedWO(null);
+      await fetchWorkOrders();
+    } catch (err: any) {
+      toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
+    }
+  };
+
   const editInitialValues = useMemo(() => {
     if (!editingWO) return undefined;
+    const extractedLines = currentOrderProductLines(editingWO);
+    const phones = splitWorkOrderPhoneFields(editingWO.phone || '');
     return {
       order_code: editingWO.order_code || '',
       customer_name: editingWO.customer_name || '',
-      phone: editingWO.phone || '',
+      phone: phones.phone,
+      phone2: phones.phone2,
+      phone3: phones.phone3,
       address: editingWO.address || '',
       location_url: editingWO.location_url || '',
       region: editingWO.region || '',
-      area_id: (editingWO as any).area_id || '',
+      area_id: (editingWO as any).area_id || 'none',
       product_name: editingWO.product_name || '',
-      price1: String((editingWO as any).price1 || 0),
-      price2: String((editingWO as any).price2 || 0),
-      price3: String((editingWO as any).price3 || 0),
+      transport_cost: String(editingWO.transport_cost || 0),
+      product_lines: JSON.stringify(extractedLines.length > 0 ? extractedLines : [{
+        product_name: editingWO.product_name || '',
+        quantity: 1,
+        unit_price: Number((editingWO as any).price1) || 0,
+        line_total: Number((editingWO as any).price1) || 0,
+      }]),
       assigned_rep: editingWO.assigned_rep || 'none',
       visit_date: editingWO.visit_date || '',
       technician: editingWO.technician || '',
@@ -400,9 +778,45 @@ export default function WorkOrdersPage({ embedded }: WorkOrdersPageProps) {
     };
   }, [editingWO, branch]);
 
+  const getNextOrderCode = () => {
+    let maxNum = 0;
+    workOrders.forEach(wo => {
+      const num = parseInt(String(wo.order_code || '').replace(/\D/g, ''), 10);
+      if (Number.isFinite(num) && num > maxNum) maxNum = num;
+    });
+    return String(maxNum + 1);
+  };
+
   const getRepName = (repId?: string) => {
     if (!repId) return null;
     return reps.find(r => r.id === repId)?.full_name || 'مندوب';
+  };
+
+  const displayOrders = useMemo(() => {
+    if (embedded && strictEmptyEmbedded) return [];
+    const f = (customerNameFilter || '').trim();
+    const base = f ? workOrders.filter((w) => (w.customer_name || '').trim() === f) : workOrders;
+    const q = searchTerm.trim().toLowerCase();
+    if (!q) return base;
+    const digits = q.replace(/\D/g, '');
+    return base.filter((w) => {
+      const haystack = [
+        w.order_code,
+        w.customer_code,
+        String(w.customer_id_num || ''),
+        w.customer_name,
+        w.phone,
+        w.region,
+        w.product_name,
+      ].join(' ').toLowerCase();
+      const phoneDigits = String(w.phone || '').replace(/\D/g, '');
+      return haystack.includes(q) || (digits.length > 0 && phoneDigits.includes(digits));
+    });
+  }, [workOrders, customerNameFilter, embedded, strictEmptyEmbedded, searchTerm]);
+
+  const openAddDialog = () => {
+    if (prefillCustomer) setInitialCustomerForOrder(prefillCustomer);
+    setAddOpen(true);
   };
 
   return (
@@ -411,26 +825,40 @@ export default function WorkOrdersPage({ embedded }: WorkOrdersPageProps) {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold">أوامر العمل</h1>
-            <p className="text-muted-foreground text-sm">{workOrders.length} أمر عمل</p>
+            <p className="text-muted-foreground text-sm">{displayOrders.length} أمر عمل</p>
           </div>
-          <Button className="gap-2" onClick={() => setAddOpen(true)}>
+          <Button className="gap-2" onClick={openAddDialog}>
             <Plus className="h-4 w-4" /> أمر عمل جديد
           </Button>
         </div>
       )}
       {embedded && (
         <div className="flex justify-end">
-          <Button className="gap-2" onClick={() => setAddOpen(true)}>
+          <Button className="gap-2" onClick={openAddDialog}>
             <Plus className="h-4 w-4" /> أمر عمل جديد
           </Button>
         </div>
       )}
 
+      <div className="flex items-center gap-2 max-w-xl">
+        <Search className="h-4 w-4 text-muted-foreground" />
+        <Input
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="بحث باسم العميل أو رقم الهاتف أو كود العميل / كود الأمر"
+          className="h-9"
+        />
+      </div>
+
       {loading ? (
         <p className="text-muted-foreground">جاري التحميل...</p>
+      ) : displayOrders.length === 0 ? (
+        <p className="text-muted-foreground text-center py-8">
+          {embedded && strictEmptyEmbedded ? 'اربط المحطة باسم عميل لعرض أوامر الشغل الخاصة به.' : 'لا توجد أوامر عمل.'}
+        </p>
       ) : (
         <div className="space-y-4">
-          {workOrders.map((wo, i) => (
+          {displayOrders.map((wo, i) => (
             <motion.div key={wo.id} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.08 }}>
               <Card className="card-shadow hover:card-shadow-lg transition-shadow">
                 <CardContent className="p-5">
@@ -458,11 +886,12 @@ export default function WorkOrdersPage({ embedded }: WorkOrdersPageProps) {
                       <p className="text-xs text-muted-foreground">{wo.product_name} • {wo.region} • {wo.branch}</p>
                       <div className="flex gap-4 text-xs text-muted-foreground flex-wrap">
                         <span>الفني: {wo.technician}</span>
-                        <span>الزيارة: {wo.visit_date}</span>
+                        <span>الزيارة: {formatDateDisplay(wo.visit_date)}</span>
                         <span>الإجمالي: <strong className="text-secondary">{formatEGP(wo.total)}</strong></span>
-                        {(wo as any).price1 > 0 && <span>سعر 1: {formatEGP((wo as any).price1)}</span>}
-                        {(wo as any).price2 > 0 && <span>سعر 2: {formatEGP((wo as any).price2)}</span>}
-                        {(wo as any).price3 > 0 && <span>سعر 3: {formatEGP((wo as any).price3)}</span>}
+                        {(Number(wo.transport_cost) || 0) > 0 && <span>مواصلات: {formatEGP(wo.transport_cost)}</span>}
+                        {Array.isArray(wo.items) && wo.items.filter((it) => String(it.description || '').startsWith('المنتج:')).length > 1 && (
+                          <span>عدد المنتجات: {wo.items.filter((it) => String(it.description || '').startsWith('المنتج:')).length}</span>
+                        )}
                       </div>
                     </div>
                     <div className="flex flex-col gap-2 items-end">
@@ -470,9 +899,14 @@ export default function WorkOrdersPage({ embedded }: WorkOrdersPageProps) {
                         <Eye className="h-4 w-4" /> عرض
                       </Button>
                       {!isDemoItem(wo.id) && (
-                        <Button variant="outline" size="sm" className="gap-2" onClick={(e) => openEdit(wo, e)}>
-                          <Edit className="h-4 w-4" /> تعديل
-                        </Button>
+                        <>
+                          <Button variant="outline" size="sm" className="gap-2" onClick={(e) => openEdit(wo, e)}>
+                            <Edit className="h-4 w-4" /> تعديل
+                          </Button>
+                          <Button variant="outline" size="sm" className="gap-2 text-destructive border-destructive/30" onClick={(e) => handleDeleteWorkOrder(wo, e)}>
+                            <Trash2 className="h-4 w-4" /> حذف
+                          </Button>
+                        </>
                       )}
                       {!wo.assigned_rep && reps.length > 0 && (
                         <Select onValueChange={(repId) => assignRep(wo.id, repId)} disabled={assigningId === wo.id}>
@@ -507,14 +941,39 @@ export default function WorkOrdersPage({ embedded }: WorkOrdersPageProps) {
                   </Button>
                 </div>
               )}
-              <WorkOrderDetail wo={selectedWO} onClose={() => setSelectedWO(null)} />
+              <WorkOrderDetail wo={selectedWO} onClose={() => setSelectedWO(null)} customers={customers} />
             </div>
           )}
         </DialogContent>
       </Dialog>
 
-      <AddDialog open={addOpen} onOpenChange={setAddOpen} title="أمر عمل جديد" fields={getWorkOrderFields(reps, branch, areas)} onSubmit={handleAdd} loading={saving} />
-      <AddDialog open={editOpen} onOpenChange={(open) => { setEditOpen(open); if (!open) setEditingWO(null); }} title="تعديل أمر العمل" fields={getWorkOrderFields(reps, branch, areas)} onSubmit={handleEdit} loading={saving} initialValues={editInitialValues} />
+      <WorkOrderAddDialog
+        open={addOpen}
+        onOpenChange={(open) => { setAddOpen(open); if (!open) setInitialCustomerForOrder(null); }}
+        reps={reps}
+        branch={branch}
+        areas={areas}
+        customers={customers}
+        products={products}
+        initialCustomer={initialCustomerForOrder}
+        nextOrderCode={getNextOrderCode()}
+        onSubmit={handleAdd}
+        loading={saving}
+      />
+      <WorkOrderAddDialog
+        open={editOpen}
+        onOpenChange={(open) => { setEditOpen(open); if (!open) setEditingWO(null); }}
+        reps={reps}
+        branch={branch}
+        areas={areas}
+        customers={customers}
+        products={products}
+        initialValues={editInitialValues}
+        title="تعديل أمر العمل"
+        submitLabel="تعديل"
+        onSubmit={handleEdit}
+        loading={saving}
+      />
     </motion.div>
   );
 }

@@ -2,12 +2,12 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { useGpsTracking } from "@/hooks/useGpsTracking";
+import { useAdminAutoBackup } from "@/hooks/useAdminAutoBackup";
 import DashboardLayout from "./layouts/DashboardLayout";
 import DashboardPage from "./pages/DashboardPage";
-import ProductsPage from "./pages/ProductsPage";
 import CustomersPage from "./pages/CustomersPage";
 import InvoicesPage from "./pages/InvoicesPage";
 import MaintenancePage from "./pages/MaintenancePage";
@@ -15,6 +15,10 @@ import WorkOrdersPage from "./pages/WorkOrdersPage";
 import InventoryPage from "./pages/InventoryPage";
 import SalesRepsPage from "./pages/SalesRepsPage";
 import FinancePage from "./pages/FinancePage";
+import ExpensesPage from "./pages/ExpensesPage";
+import ReceiptVouchersPage from "./pages/ReceiptVouchersPage";
+import ReturnsPage from "./pages/ReturnsPage";
+import PurchasesPage from "./pages/PurchasesPage";
 import ReportsPage from "./pages/ReportsPage";
 import TrackingPage from "./pages/TrackingPage";
 import RepDeliveryPage from "./pages/RepDeliveryPage";
@@ -25,16 +29,19 @@ import AreasPage from "./pages/AreasPage";
 import InventoryCategoriesPage from "./pages/InventoryCategoriesPage";
 import CustomerServiceDashboardPage from "./pages/CustomerServiceDashboardPage";
 import CustomerServiceFollowUpsPage from "./pages/CustomerServiceFollowUpsPage";
+import StationsPage from "./pages/StationsPage";
 import AuthPage from "./pages/AuthPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
 
 function AppRoutes() {
-  const { user, loading, signIn, signUp, isAdmin, isRep, isCustomerService, profile, signOut } = useAuth();
+  const { user, loading, signIn, signUp, isAdmin, isRep, isCustomerService, isWarehouseKeeper, profile, signOut } = useAuth();
   
   // GPS tracking for sales reps
   useGpsTracking(user?.id, isRep);
+  // Auto backup at local midnight while admin session stays open on this device
+  useAdminAutoBackup(!!user && isAdmin);
 
   if (loading) {
     return (
@@ -63,7 +70,7 @@ function AppRoutes() {
     );
   }
 
-  if (isCustomerService && !isAdmin) {
+  if (isCustomerService && !isAdmin && !isWarehouseKeeper) {
     return (
       <Routes>
         <Route element={<DashboardLayout isAdmin={false} isCustomerService={true} profile={profile} onSignOut={signOut} />}>
@@ -80,11 +87,35 @@ function AppRoutes() {
     );
   }
 
+  if (isWarehouseKeeper && !isAdmin) {
+    return (
+      <Routes>
+        <Route element={<DashboardLayout isAdmin={false} isWarehouseKeeper={true} profile={profile} onSignOut={signOut} />}>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/products" element={<Navigate to="/inventory" replace />} />
+          <Route path="/customers" element={<CustomersPage />} />
+          <Route path="/invoices" element={<InvoicesPage />} />
+          <Route path="/visits" element={<VisitsHubPage />} />
+          <Route path="/maintenance" element={<VisitsHubPage />} />
+          <Route path="/work-orders" element={<VisitsHubPage />} />
+          <Route path="/inventory" element={<InventoryPage />} />
+          <Route path="/returns" element={<ReturnsPage />} />
+          <Route path="/purchases" element={<PurchasesPage />} />
+          <Route path="/settings/inventory-categories" element={<InventoryCategoriesPage />} />
+          <Route path="/areas" element={<AreasPage />} />
+          <Route path="/stations" element={<StationsPage />} />
+          <Route path="/reports" element={<ReportsPage />} />
+        </Route>
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    );
+  }
+
   return (
     <Routes>
       <Route element={<DashboardLayout isAdmin={isAdmin} profile={profile} onSignOut={signOut} />}>
         <Route path="/" element={<DashboardPage />} />
-        <Route path="/products" element={<ProductsPage isAdmin={isAdmin} />} />
+        <Route path="/products" element={<Navigate to="/inventory" replace />} />
         <Route path="/customers" element={<CustomersPage />} />
         <Route path="/invoices" element={<InvoicesPage />} />
         <Route path="/maintenance" element={<VisitsHubPage />} />
@@ -92,9 +123,14 @@ function AppRoutes() {
         <Route path="/visits" element={<VisitsHubPage />} />
         <Route path="/inventory" element={<InventoryPage />} />
         <Route path="/settings/inventory-categories" element={<InventoryCategoriesPage />} />
-        <Route path="/areas" element={<AreasPage />} />
-        <Route path="/sales-reps" element={<SalesRepsPage isAdmin={isAdmin} />} />
+          <Route path="/areas" element={<AreasPage />} />
+          <Route path="/stations" element={<StationsPage />} />
+          <Route path="/sales-reps" element={<SalesRepsPage isAdmin={isAdmin} />} />
         <Route path="/finance" element={<FinancePage />} />
+        <Route path="/expenses" element={<ExpensesPage />} />
+        <Route path="/receipt-vouchers" element={<ReceiptVouchersPage />} />
+        <Route path="/returns" element={<ReturnsPage />} />
+        <Route path="/purchases" element={<PurchasesPage />} />
         <Route path="/reports" element={<ReportsPage />} />
         {isAdmin && <Route path="/tracking" element={<TrackingPage />} />}
         {isAdmin && <Route path="/backup" element={<BackupPage />} />}

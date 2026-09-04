@@ -43,10 +43,12 @@ export function AddDialog({ open, onOpenChange, title, fields, onSubmit, loading
         fields.forEach(f => { if (f.type !== 'file') init[f.name] = f.defaultValue || ''; });
         setValues(init);
       }
+      setSelectSearch({});
     }
   }, [open, initialValues]);
   const [files, setFiles] = useState<Record<string, File>>({});
   const [previews, setPreviews] = useState<Record<string, string>>({});
+  const [selectSearch, setSelectSearch] = useState<Record<string, string>>({});
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
   const handleFileChange = (fieldName: string, file: File | null) => {
@@ -69,6 +71,7 @@ export function AddDialog({ open, onOpenChange, title, fields, onSubmit, loading
     setValues(init);
     setFiles({});
     setPreviews({});
+    setSelectSearch({});
   };
 
   return (
@@ -110,14 +113,37 @@ export function AddDialog({ open, onOpenChange, title, fields, onSubmit, loading
                   required={field.required}
                 />
               ) : field.type === 'select' ? (
-                <Select value={values[field.name]} onValueChange={v => setValues(prev => ({ ...prev, [field.name]: v }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {field.options?.map(opt => (
-                      <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="space-y-2">
+                  <Input
+                    value={selectSearch[field.name] || ''}
+                    onChange={e => setSelectSearch(prev => ({ ...prev, [field.name]: e.target.value }))}
+                    placeholder={`ابحث في ${field.label}...`}
+                  />
+                  <Select
+                    value={[undefined, ''].includes(values[field.name] as any) ? (field.defaultValue ?? field.options?.[0]?.value) : values[field.name]}
+                    onValueChange={v => setValues(prev => ({ ...prev, [field.name]: v }))}
+                  >
+                    <SelectTrigger><SelectValue placeholder={field.label} /></SelectTrigger>
+                    <SelectContent>
+                      {(field.options || [])
+                        .filter(opt => {
+                          const term = (selectSearch[field.name] || '').trim().toLowerCase();
+                          if (!term) return true;
+                          return opt.label.toLowerCase().includes(term) || opt.value.toLowerCase().includes(term);
+                        })
+                        .map(opt => (
+                          <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                  {(field.options || []).length > 0 && (field.options || []).filter(opt => {
+                    const term = (selectSearch[field.name] || '').trim().toLowerCase();
+                    if (!term) return true;
+                    return opt.label.toLowerCase().includes(term) || opt.value.toLowerCase().includes(term);
+                  }).length === 0 && (
+                    <p className="text-xs text-muted-foreground">لا توجد نتائج مطابقة</p>
+                  )}
+                </div>
               ) : (
                 <Input
                   id={field.name}

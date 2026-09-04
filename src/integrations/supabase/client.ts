@@ -27,6 +27,7 @@ type AuthenticatedUser = AuthUser & {
 
 type QueryFilter =
   | { field: string; operator: 'eq'; value: unknown }
+  | { field: string; operator: 'neq'; value: unknown }
   | { field: string; operator: 'like'; value: unknown }
   | { field: string; operator: 'in'; value: unknown[] }
   | { field: string; operator: 'not'; comparator: string; value: unknown };
@@ -152,7 +153,11 @@ class QueryBuilder<T = any> implements PromiseLike<ApiResult<T>> {
   constructor(private readonly table: string) {}
 
   select(columns = '*') {
-    this.action = 'select';
+    // .insert().select() or .update().select() = "return rows after mutation"
+    // Keep the mutation action so the server actually performs the write.
+    if (this.action !== 'insert' && this.action !== 'update') {
+      this.action = 'select';
+    }
     this.columns = columns;
     return this;
   }
@@ -179,6 +184,11 @@ class QueryBuilder<T = any> implements PromiseLike<ApiResult<T>> {
     return this;
   }
 
+  neq(field: string, value: unknown) {
+    this.filters.push({ field, operator: 'neq', value });
+    return this;
+  }
+
   like(field: string, value: unknown) {
     this.filters.push({ field, operator: 'like', value });
     return this;
@@ -186,6 +196,14 @@ class QueryBuilder<T = any> implements PromiseLike<ApiResult<T>> {
 
   in(field: string, value: unknown[]) {
     this.filters.push({ field, operator: 'in', value });
+    return this;
+  }
+
+  // توافق مع أسلوب Supabase التقليدي: .match({ a: 1, b: 'x' })
+  match(criteria: Record<string, unknown>) {
+    Object.entries(criteria || {}).forEach(([field, value]) => {
+      this.filters.push({ field, operator: 'eq', value });
+    });
     return this;
   }
 
@@ -317,7 +335,7 @@ const auth = {
     options?: {
       data?: {
         full_name?: string;
-        role?: 'admin' | 'sales_rep' | 'customer_service';
+        role?: 'admin' | 'sales_rep' | 'customer_service' | 'warehouse_keeper';
         branch_id?: string;
         phone?: string;
       };

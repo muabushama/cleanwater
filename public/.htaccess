@@ -7,6 +7,15 @@
   RewriteRule . /index.html [L]
 </IfModule>
 
+# لا تخزّن index.html — يشير لملفات JS/CSS بأسماء جديدة بعد كل build
+<IfModule mod_headers.c>
+  <FilesMatch "^index\.html$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+  </FilesMatch>
+</IfModule>
+
 # Cache static assets
 <IfModule mod_expires.c>
   ExpiresActive On

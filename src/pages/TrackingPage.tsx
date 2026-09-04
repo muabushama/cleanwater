@@ -6,6 +6,8 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { MapPin, Clock, Navigation, Package, Phone, Truck, User, ChevronDown, ChevronUp, RefreshCw, Crosshair, StopCircle } from 'lucide-react';
 
+const formatDateDisplay = (v?: string | null) => { const s = String(v || ''); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : s; };
+
 interface RepLocation {
   id: string;
   user_id: string;
@@ -375,7 +377,7 @@ export default function TrackingPage() {
                                   </div>
                                 </div>
                                 <div className="flex items-center justify-between text-xs">
-                                  <span className="text-muted-foreground">{order.visit_date}</span>
+                                  <span className="text-muted-foreground">{formatDateDisplay(order.visit_date)}</span>
                                   <span className="font-bold">{order.total.toLocaleString()} ج.م</span>
                                 </div>
                               </div>

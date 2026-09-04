@@ -12,9 +12,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import logo from '@/assets/logo.png';
+import { invoiceCustomerCredit, invoiceDebtRemaining } from '@/lib/invoiceBalance';
+
+const formatDateDisplay = (v: any) => { const s = String(v || ''); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : s; };
+import { branchDbValuesForUiBranch } from '@/lib/branchFilters';
 import {
   Package, MapPin, Phone, Check, X, Truck, Navigation, Clock, History,
-  ShoppingCart, Plus, Printer, FileText, Search,
+  ShoppingCart, Plus, Printer, FileText, Search, RotateCcw,
 } from 'lucide-react';
 
 type DeliveryStatus = 'pending' | 'accepted' | 'in_transit' | 'delivered' | 'rejected';
@@ -61,6 +65,17 @@ interface SaleInvoice {
   status: string;
 }
 
+function profileBranchName(profile: { branch_id?: string } | null | undefined): string {
+  const map: Record<string, string> = {
+    '1': 'فرع الإسكندرية',
+    '2': 'فرع الجيزة',
+    'فرع الإسكندرية': 'فرع الإسكندرية',
+    'فرع الجيزة': 'فرع الجيزة',
+  };
+  if (!profile?.branch_id) return 'فرع الإسكندرية';
+  return map[String(profile.branch_id)] || String(profile.branch_id);
+}
+
 const statusMap: Record<DeliveryStatus, { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
   pending: { label: 'في انتظار الموافقة', variant: 'outline' },
   accepted: { label: 'تم القبول', variant: 'secondary' },
@@ -78,7 +93,11 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
   const [showSaleDialog, setShowSaleDialog] = useState(false);
+  const [showReturnDialog, setShowReturnDialog] = useState(false);
+  const [showPurchaseDialog, setShowPurchaseDialog] = useState(false);
   const [viewInvoice, setViewInvoice] = useState<SaleInvoice | null>(null);
+  const [myReturns, setMyReturns] = useState<{ id: string; return_number: string; customer_name: string; product_name: string; quantity: number; amount: number; return_date: string }[]>([]);
+  const [myPurchases, setMyPurchases] = useState<{ id: string; purchase_number: string; supplier_name: string; product_name: string; quantity: number; total: number; purchase_date: string }[]>([]);
   const { toast } = useToast();
 
   // Sale form
@@ -88,26 +107,51 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
     price_tier: 'price' as 'price' | 'price1' | 'price2' | 'price3',
     unit_price: 0, total: 0, paid: 0, notes: '',
   });
+  const [returnForm, setReturnForm] = useState({ customer_name: '', product_id: '', product_name: '', quantity: 1, amount: 0, notes: '' });
+  const [purchaseForm, setPurchaseForm] = useState({ supplier_name: '', product_id: '', product_name: '', quantity: 1, unit_price: 0, total: 0, notes: '' });
   const [saving, setSaving] = useState(false);
+  const [returnSaving, setReturnSaving] = useState(false);
+  const [purchaseSaving, setPurchaseSaving] = useState(false);
   const [productSearch, setProductSearch] = useState('');
 
   const fetchAll = async () => {
-    const [activeRes, historyRes, prodRes, profileRes] = await Promise.all([
+    const [activeRes, historyRes, profileRes] = await Promise.all([
       supabase.from('work_orders').select('*').eq('assigned_rep', userId).in('delivery_status', ['pending', 'accepted', 'in_transit']).order('created_at', { ascending: false }),
       supabase.from('work_orders').select('*').eq('assigned_rep', userId).in('delivery_status', ['delivered', 'rejected']).order('created_at', { ascending: false }).limit(50),
-      supabase.from('products').select('*').order('name'),
       supabase.from('profiles').select('full_name, branch_id').eq('id', userId).single(),
     ]);
     if (activeRes.data) setOrders(activeRes.data as unknown as Order[]);
     if (historyRes.data) setDeliveredOrders(historyRes.data as unknown as Order[]);
-    if (prodRes.data) setProducts(prodRes.data as any as Product[]);
     if (profileRes.data) setProfile(profileRes.data as any);
 
-    // Fetch my invoices
+    const repBranch = profileBranchName(profileRes.data as { branch_id?: string } | null);
+
+    const prodRes = await supabase.from('products').select('*').in('branch', branchDbValuesForUiBranch(repBranch)).order('name');
+    if (prodRes.data) setProducts(prodRes.data as any as Product[]);
+
+    // Fetch my invoices, returns, purchases
     const repName = profileRes.data?.full_name || '';
     if (repName) {
-      const { data: invData } = await supabase.from('invoices').select('*').eq('rep_name', repName).order('created_at', { ascending: false }).limit(50);
-      if (invData) setMyInvoices(invData as any as SaleInvoice[]);
+      const [invRes2, retRes, purRes] = await Promise.all([
+        supabase.from('invoices').select('*').eq('rep_name', repName).in('branch', branchDbValuesForUiBranch(repBranch)).order('created_at', { ascending: false }).limit(50),
+        supabase
+          .from('returns')
+          .select('id, return_number, customer_name, product_name, quantity, amount, return_date')
+          .eq('rep_name', repName)
+          .in('branch', branchDbValuesForUiBranch(repBranch))
+          .order('return_date', { ascending: false })
+          .limit(50),
+        supabase
+          .from('purchases')
+          .select('id, purchase_number, supplier_name, product_name, quantity, total, purchase_date')
+          .eq('rep_name', repName)
+          .in('branch', branchDbValuesForUiBranch(repBranch))
+          .order('purchase_date', { ascending: false })
+          .limit(50),
+      ]);
+      if (invRes2.data) setMyInvoices(invRes2.data as any as SaleInvoice[]);
+      if (retRes.data) setMyReturns(retRes.data as any);
+      if (purRes.data) setMyPurchases(purRes.data as any);
     }
     setLoading(false);
   };
@@ -169,10 +213,10 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
 
     setSaving(true);
     try {
-      const remaining = saleForm.total - saleForm.paid;
+      const remaining = invoiceDebtRemaining(saleForm.total, saleForm.paid);
       const status = remaining <= 0 ? 'paid' : saleForm.paid > 0 ? 'partial' : 'pending';
       const invoiceNumber = `INV-REP-${Date.now().toString().slice(-6)}`;
-      const branchName = profile?.branch_id === '2' ? 'فرع الجيزة' : 'فرع الإسكندرية';
+      const branchName = profileBranchName(profile);
 
       // Create invoice
       const { error: invError } = await supabase.from('invoices').insert({
@@ -210,9 +254,116 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
     }
   };
 
+  const branchName = profileBranchName(profile);
+
+  const handleCreateReturn = async () => {
+    if (!returnForm.customer_name.trim() || !returnForm.product_id) {
+      toast({ title: 'خطأ', description: 'اسم العميل والمنتج مطلوبان', variant: 'destructive' });
+      return;
+    }
+    const product = products.find(p => p.id === returnForm.product_id);
+    const qty = Math.max(1, returnForm.quantity);
+    setReturnSaving(true);
+    try {
+      const returnNumber = `RET-REP-${Date.now().toString().slice(-6)}`;
+      const id = crypto.randomUUID();
+      await supabase.from('returns').insert({
+        id,
+        return_number: returnNumber,
+        customer_name: returnForm.customer_name.trim(),
+        product_id: returnForm.product_id,
+        product_name: product?.name || returnForm.product_name || 'منتج',
+        quantity: qty,
+        amount: returnForm.amount || 0,
+        return_date: new Date().toISOString().split('T')[0],
+        branch: branchName,
+        rep_name: profile?.full_name || '',
+        notes: returnForm.notes.trim() || null,
+      });
+      await supabase.from('stock_movements').insert({
+        id: crypto.randomUUID(),
+        product_id: returnForm.product_id,
+        branch: branchName,
+        type: 'purchase',
+        quantity: qty,
+        reference_type: 'return',
+        reference_id: id,
+        notes: `مرتجع ${returnNumber}`,
+      });
+      if (product) {
+        const newStock = (Number(product.stock) || 0) + qty;
+        await supabase.from('products').update({ stock: newStock }).eq('id', returnForm.product_id);
+      }
+      toast({ title: `تم تسجيل المرتجع ✅ ${returnNumber}` });
+      setShowReturnDialog(false);
+      setReturnForm({ customer_name: '', product_id: '', product_name: '', quantity: 1, amount: 0, notes: '' });
+      fetchAll();
+    } catch (err: any) {
+      toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
+    } finally {
+      setReturnSaving(false);
+    }
+  };
+
+  const handleCreatePurchase = async () => {
+    if (!purchaseForm.supplier_name.trim() || !purchaseForm.product_id) {
+      toast({ title: 'خطأ', description: 'اسم المورد والمنتج مطلوبان', variant: 'destructive' });
+      return;
+    }
+    const product = products.find(p => p.id === purchaseForm.product_id);
+    const qty = Math.max(1, purchaseForm.quantity);
+    const total = purchaseForm.total || purchaseForm.unit_price * qty;
+    setPurchaseSaving(true);
+    try {
+      const purchaseNumber = `PUR-REP-${Date.now().toString().slice(-6)}`;
+      const id = crypto.randomUUID();
+      await supabase.from('purchases').insert({
+        id,
+        purchase_number: purchaseNumber,
+        supplier_name: purchaseForm.supplier_name.trim(),
+        product_id: purchaseForm.product_id,
+        product_name: product?.name || purchaseForm.product_name || 'منتج',
+        quantity: qty,
+        unit_price: purchaseForm.unit_price || 0,
+        total,
+        purchase_date: new Date().toISOString().split('T')[0],
+        branch: branchName,
+        rep_name: profile?.full_name || '',
+        notes: purchaseForm.notes.trim() || null,
+      });
+      await supabase.from('stock_movements').insert({
+        id: crypto.randomUUID(),
+        product_id: purchaseForm.product_id,
+        branch: branchName,
+        type: 'purchase',
+        quantity: qty,
+        reference_type: 'purchase',
+        reference_id: id,
+        notes: `مشتريات ${purchaseNumber}`,
+      });
+      if (product) {
+        const newStock = (Number(product.stock) || 0) + qty;
+        await supabase.from('products').update({ stock: newStock }).eq('id', purchaseForm.product_id);
+      }
+      toast({ title: `تم تسجيل المشتريات ✅ ${purchaseNumber}` });
+      setShowPurchaseDialog(false);
+      setPurchaseForm({ supplier_name: '', product_id: '', product_name: '', quantity: 1, unit_price: 0, total: 0, notes: '' });
+      fetchAll();
+    } catch (err: any) {
+      toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
+    } finally {
+      setPurchaseSaving(false);
+    }
+  };
+
   const handlePrintInvoice = (inv: SaleInvoice) => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
+    const debt = invoiceDebtRemaining(inv.amount, inv.paid);
+    const credit = invoiceCustomerCredit(inv.amount, inv.paid);
+    const remLabel = credit > 0 ? 'رصيد للعميل (بالموجب)' : 'المتبقي على العميل';
+    const remVal = credit > 0 ? credit : debt;
+    const remBoxClass = credit > 0 ? 'cred' : 'rem';
     printWindow.document.write(`
       <html dir="rtl"><head><title>فاتورة ${inv.invoice_number}</title>
       <style>
@@ -230,7 +381,7 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
         th { background: #f0f4f8; }
         .amounts { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 12px 0; }
         .amount-box { text-align: center; padding: 8px; border-radius: 6px; color: white; }
-        .total { background: #1a3a5c; } .paid { background: #2d8a6e; } .rem { background: #c0392b; }
+        .total { background: #1a3a5c; } .paid { background: #2d8a6e; } .rem { background: #c0392b; } .cred { background: #1e7e34; }
         .sigs { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; text-align: center; margin-top: 30px; font-size: 11px; color: #666; }
         .sig-line { border-top: 1px dashed #999; margin-top: 40px; padding-top: 4px; }
         .footer { margin-top: 15px; padding-top: 8px; border-top: 1px solid #ddd; font-size: 9px; color: #888; text-align: center; }
@@ -242,7 +393,7 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
         </div>
         <div class="grid">
           <div><span class="label">رقم الفاتورة: </span>${inv.invoice_number}</div>
-          <div><span class="label">التاريخ: </span>${inv.date}</div>
+          <div><span class="label">التاريخ: </span>${formatDateDisplay(inv.date)}</div>
           <div><span class="label">العميل: </span><strong>${inv.customer_name}</strong></div>
           <div><span class="label">المندوب: </span>${inv.rep_name}</div>
           <div><span class="label">الفرع: </span>${inv.branch}</div>
@@ -252,7 +403,7 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
         <div class="amounts">
           <div class="amount-box total"><div style="font-size:10px;opacity:0.9">الإجمالي</div><div style="font-size:16px;font-weight:800">${inv.amount.toLocaleString()} ج.م</div></div>
           <div class="amount-box paid"><div style="font-size:10px;opacity:0.9">المدفوع</div><div style="font-size:16px;font-weight:800">${inv.paid.toLocaleString()} ج.م</div></div>
-          <div class="amount-box rem"><div style="font-size:10px;opacity:0.9">المتبقي</div><div style="font-size:16px;font-weight:800">${inv.remaining.toLocaleString()} ج.م</div></div>
+          <div class="amount-box ${remBoxClass}"><div style="font-size:10px;opacity:0.9">${remLabel}</div><div style="font-size:16px;font-weight:800">${remVal.toLocaleString()} ج.م</div></div>
         </div>
         <div class="sigs">
           <div><div style="font-weight:600">توقيع العميل</div><div class="sig-line">التوقيع</div></div>
@@ -306,18 +457,32 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4 max-w-2xl mx-auto">
-      {/* Quick Sale Button */}
-      <Button className="w-full gap-2 h-12 text-base" onClick={() => setShowSaleDialog(true)}>
-        <ShoppingCart className="h-5 w-5" /> تسجيل بيع جديد
-      </Button>
+      {/* Quick actions */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <Button className="gap-2 h-11" onClick={() => setShowSaleDialog(true)}>
+          <ShoppingCart className="h-4 w-4" /> تسجيل بيع
+        </Button>
+        <Button variant="outline" className="gap-2 h-11" onClick={() => setShowReturnDialog(true)}>
+          <RotateCcw className="h-4 w-4" /> مرتجع
+        </Button>
+        <Button variant="outline" className="gap-2 h-11" onClick={() => setShowPurchaseDialog(true)}>
+          <Package className="h-4 w-4" /> مشتريات
+        </Button>
+      </div>
 
       <Tabs defaultValue="active" className="w-full">
-        <TabsList className="w-full grid grid-cols-3">
+        <TabsList className="w-full grid grid-cols-5 max-sm:grid-cols-2 max-sm:grid-rows-3">
           <TabsTrigger value="active" className="gap-1 text-xs">
             <Truck className="h-3.5 w-3.5" /> الأوردرات ({orders.length})
           </TabsTrigger>
           <TabsTrigger value="sales" className="gap-1 text-xs">
             <FileText className="h-3.5 w-3.5" /> مبيعاتي ({myInvoices.length})
+          </TabsTrigger>
+          <TabsTrigger value="returns" className="gap-1 text-xs">
+            <RotateCcw className="h-3.5 w-3.5" /> مرتجعاتي ({myReturns.length})
+          </TabsTrigger>
+          <TabsTrigger value="purchases" className="gap-1 text-xs">
+            <Package className="h-3.5 w-3.5" /> مشترياتي ({myPurchases.length})
           </TabsTrigger>
           <TabsTrigger value="history" className="gap-1 text-xs">
             <History className="h-3.5 w-3.5" /> السجل
@@ -374,17 +539,64 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
                         </Badge>
                       </div>
                       <p className="text-sm">{inv.customer_name}</p>
-                      <p className="text-xs text-muted-foreground">{inv.product_name} • {inv.date}</p>
+                      <p className="text-xs text-muted-foreground">{inv.product_name} • {formatDateDisplay(inv.date)}</p>
                       <div className="flex gap-3 mt-1 text-xs">
                         <span>الإجمالي: <strong>{formatEGP(inv.amount)}</strong></span>
                         <span className="text-secondary">المدفوع: {formatEGP(inv.paid)}</span>
-                        {inv.remaining > 0 && <span className="text-destructive">المتبقي: {formatEGP(inv.remaining)}</span>}
+                        {invoiceDebtRemaining(inv.amount, inv.paid) > 0 && (
+                          <span className="text-destructive">المتبقي: {formatEGP(invoiceDebtRemaining(inv.amount, inv.paid))}</span>
+                        )}
+                        {invoiceCustomerCredit(inv.amount, inv.paid) > 0 && (
+                          <span className="text-emerald-700">رصيد للعميل: {formatEGP(invoiceCustomerCredit(inv.amount, inv.paid))}</span>
+                        )}
                       </div>
                     </div>
                     <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => handlePrintInvoice(inv)}>
                       <Printer className="h-3.5 w-3.5" />
                     </Button>
                   </div>
+                </CardContent>
+              </Card>
+            ))
+          )}
+        </TabsContent>
+
+        {/* My Returns Tab */}
+        <TabsContent value="returns" className="space-y-3 mt-4">
+          {myReturns.length === 0 ? (
+            <Card className="card-shadow"><CardContent className="p-12 text-center">
+              <RotateCcw className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
+              <p className="text-muted-foreground">لا توجد مرتجعات</p>
+              <Button className="mt-3 gap-2" onClick={() => setShowReturnDialog(true)}><Plus className="h-4 w-4" /> تسجيل مرتجع</Button>
+            </CardContent></Card>
+          ) : (
+            myReturns.map(r => (
+              <Card key={r.id} className="card-shadow">
+                <CardContent className="p-4">
+                  <p className="font-bold text-sm">{r.return_number}</p>
+                  <p className="text-sm">{r.customer_name} – {r.product_name}</p>
+                  <p className="text-xs text-muted-foreground">{formatDateDisplay(r.return_date)} | الكمية: {r.quantity} | {formatEGP(r.amount)}</p>
+                </CardContent>
+              </Card>
+            ))
+          )}
+        </TabsContent>
+
+        {/* My Purchases Tab */}
+        <TabsContent value="purchases" className="space-y-3 mt-4">
+          {myPurchases.length === 0 ? (
+            <Card className="card-shadow"><CardContent className="p-12 text-center">
+              <Package className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
+              <p className="text-muted-foreground">لا توجد مشتريات</p>
+              <Button className="mt-3 gap-2" onClick={() => setShowPurchaseDialog(true)}><Plus className="h-4 w-4" /> تسجيل مشتريات</Button>
+            </CardContent></Card>
+          ) : (
+            myPurchases.map(p => (
+              <Card key={p.id} className="card-shadow">
+                <CardContent className="p-4">
+                  <p className="font-bold text-sm">{p.purchase_number}</p>
+                  <p className="text-sm">{p.supplier_name} – {p.product_name}</p>
+                  <p className="text-xs text-muted-foreground">{formatDateDisplay(p.purchase_date)} | الكمية: {p.quantity} | {formatEGP(p.total)}</p>
                 </CardContent>
               </Card>
             ))
@@ -531,6 +743,92 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Return Dialog */}
+      <Dialog open={showReturnDialog} onOpenChange={setShowReturnDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>تسجيل مرتجع</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">اسم العميل *</Label>
+              <Input value={returnForm.customer_name} onChange={e => setReturnForm(p => ({ ...p, customer_name: e.target.value }))} placeholder="اسم العميل" className="h-8" />
+            </div>
+            <div>
+              <Label className="text-xs">المنتج *</Label>
+              <Select value={returnForm.product_id || 'none'} onValueChange={v => { if (v === 'none') { setReturnForm(p => ({ ...p, product_id: '', product_name: '' })); return; } const prod = products.find(x => x.id === v); setReturnForm(p => ({ ...p, product_id: v, product_name: prod?.name || '' })); }}>
+                <SelectTrigger className="h-8"><SelectValue placeholder="اختر المنتج" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— اختر منتج —</SelectItem>
+                  {products.map(p => (<SelectItem key={p.id} value={p.id}>{p.name} (رصيد: {p.stock})</SelectItem>))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label className="text-xs">الكمية *</Label>
+                <Input type="number" min={1} value={returnForm.quantity} onChange={e => setReturnForm(p => ({ ...p, quantity: Number(e.target.value) || 1 }))} className="h-8" dir="ltr" />
+              </div>
+              <div>
+                <Label className="text-xs">المبلغ</Label>
+                <Input type="number" min={0} value={returnForm.amount} onChange={e => setReturnForm(p => ({ ...p, amount: Number(e.target.value) || 0 }))} className="h-8" dir="ltr" />
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">ملاحظات</Label>
+              <Input value={returnForm.notes} onChange={e => setReturnForm(p => ({ ...p, notes: e.target.value }))} placeholder="اختياري" className="h-8" />
+            </div>
+            <div className="flex gap-2 justify-end pt-2">
+              <Button variant="outline" onClick={() => setShowReturnDialog(false)}>إلغاء</Button>
+              <Button onClick={handleCreateReturn} disabled={returnSaving} className="gap-2"><RotateCcw className="h-4 w-4" /> {returnSaving ? 'جاري الحفظ...' : 'تسجيل المرتجع'}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Purchase Dialog */}
+      <Dialog open={showPurchaseDialog} onOpenChange={setShowPurchaseDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle>تسجيل مشتريات</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">اسم المورد *</Label>
+              <Input value={purchaseForm.supplier_name} onChange={e => setPurchaseForm(p => ({ ...p, supplier_name: e.target.value }))} placeholder="اسم المورد" className="h-8" />
+            </div>
+            <div>
+              <Label className="text-xs">المنتج *</Label>
+              <Select value={purchaseForm.product_id || 'none'} onValueChange={v => { if (v === 'none') { setPurchaseForm(p => ({ ...p, product_id: '', product_name: '' })); return; } const prod = products.find(x => x.id === v); const u = Number((prod as any)?.cost) || 0; const q = purchaseForm.quantity || 1; setPurchaseForm(p => ({ ...p, product_id: v, product_name: prod?.name || '', unit_price: u, total: u * q })); }}>
+                <SelectTrigger className="h-8"><SelectValue placeholder="اختر المنتج" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">— اختر منتج —</SelectItem>
+                  {products.map(p => (<SelectItem key={p.id} value={p.id}>{p.name} (رصيد: {p.stock})</SelectItem>))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <Label className="text-xs">الكمية *</Label>
+                <Input type="number" min={1} value={purchaseForm.quantity} onChange={e => { const q = Number(e.target.value) || 1; const u = purchaseForm.unit_price || 0; setPurchaseForm(p => ({ ...p, quantity: q, total: q * u })); }} className="h-8" dir="ltr" />
+              </div>
+              <div>
+                <Label className="text-xs">سعر الوحدة</Label>
+                <Input type="number" min={0} value={purchaseForm.unit_price} onChange={e => { const u = Number(e.target.value) || 0; const q = purchaseForm.quantity || 1; setPurchaseForm(p => ({ ...p, unit_price: u, total: q * u })); }} className="h-8" dir="ltr" />
+              </div>
+              <div>
+                <Label className="text-xs">الإجمالي</Label>
+                <Input type="number" min={0} value={purchaseForm.total} readOnly className="h-8 bg-muted/50" dir="ltr" />
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">ملاحظات</Label>
+              <Input value={purchaseForm.notes} onChange={e => setPurchaseForm(p => ({ ...p, notes: e.target.value }))} placeholder="اختياري" className="h-8" />
+            </div>
+            <div className="flex gap-2 justify-end pt-2">
+              <Button variant="outline" onClick={() => setShowPurchaseDialog(false)}>إلغاء</Button>
+              <Button onClick={handleCreatePurchase} disabled={purchaseSaving} className="gap-2"><Package className="h-4 w-4" /> {purchaseSaving ? 'جاري الحفظ...' : 'تسجيل المشتريات'}</Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </motion.div>
   );
 }
@@ -548,7 +846,7 @@ function OrderCard({ order, updating, onUpdateStatus, getMapUrl, onOpenMap, isAc
           <div className="flex items-start justify-between">
             <div>
               <p className={`font-bold ${isActive ? 'text-lg' : ''}`}>{order.customer_name}</p>
-              <p className="text-xs text-muted-foreground">#{order.order_code} • {order.visit_date}</p>
+              <p className="text-xs text-muted-foreground">#{order.order_code} • {formatDateDisplay(order.visit_date)}</p>
             </div>
             <Badge variant={statusMap[order.delivery_status]?.variant || 'outline'}>{statusMap[order.delivery_status]?.label}</Badge>
           </div>

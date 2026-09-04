@@ -1,7 +1,6 @@
 import logo from '@/assets/logo.png';
 import {
   LayoutDashboard,
-  Package,
   Users,
   FileText,
   Wrench,
@@ -9,6 +8,7 @@ import {
   Warehouse,
   UserCheck,
   DollarSign,
+  TrendingDown,
   BarChart3,
   MapPin,
   CalendarCheck,
@@ -16,6 +16,9 @@ import {
   Headset,
   ListChecks,
   Layers,
+  RotateCcw,
+  ShoppingCart,
+  Factory,
 } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { NavLink } from '@/components/NavLink';
@@ -34,7 +37,6 @@ import {
 
 const mainItems = [
   { title: 'لوحة التحكم', url: '/', icon: LayoutDashboard },
-  { title: 'المنتجات', url: '/products', icon: Package },
   { title: 'العملاء', url: '/customers', icon: Users },
   { title: 'الفواتير', url: '/invoices', icon: FileText },
   { title: 'الزيارات', url: '/visits', icon: CalendarCheck },
@@ -43,9 +45,14 @@ const mainItems = [
 const managementItems = [
   { title: 'المخزون', url: '/inventory', icon: Warehouse },
   { title: 'أقسام المخزون', url: '/settings/inventory-categories', icon: Layers },
+  { title: 'المرتجعات', url: '/returns', icon: RotateCcw },
+  { title: 'الموردين', url: '/purchases', icon: ShoppingCart },
+  { title: 'المحطات', url: '/stations', icon: Factory },
   { title: 'القطاعات والمناطق', url: '/areas', icon: MapPin },
-  { title: 'المناديب', url: '/sales-reps', icon: UserCheck },
+  { title: 'الموظفين', url: '/sales-reps', icon: UserCheck },
   { title: 'المالية', url: '/finance', icon: DollarSign },
+  { title: 'المصروفات', url: '/expenses', icon: TrendingDown },
+  { title: 'سندات القبض', url: '/receipt-vouchers', icon: FileText },
   { title: 'التقارير', url: '/reports', icon: BarChart3 },
 ];
 
@@ -60,9 +67,10 @@ const customerServiceItems = [
 interface AppSidebarProps {
   isAdmin?: boolean;
   isCustomerService?: boolean;
+  isWarehouseKeeper?: boolean;
 }
 
-export function AppSidebar({ isAdmin, isCustomerService }: AppSidebarProps) {
+export function AppSidebar({ isAdmin, isCustomerService, isWarehouseKeeper }: AppSidebarProps) {
   const { state } = useSidebar();
   const collapsed = state === 'collapsed';
   const location = useLocation();
@@ -73,8 +81,12 @@ export function AppSidebar({ isAdmin, isCustomerService }: AppSidebarProps) {
     { title: 'النسخ الاحتياطي', url: '/backup', icon: Shield },
   ] : [];
 
+  const managementItemsFiltered = isWarehouseKeeper
+    ? managementItems.filter(m => m.url !== '/finance')
+    : managementItems;
+
   const primaryItems = isCustomerService ? customerServiceItems : mainItems;
-  const secondaryItems = isCustomerService ? [] : [...managementItems, ...adminItems];
+  const secondaryItems = isCustomerService ? [] : [...managementItemsFiltered, ...adminItems];
 
   return (
     <Sidebar side="right" collapsible="icon" className="border-r-0 gradient-sidebar">

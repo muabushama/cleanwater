@@ -5,10 +5,14 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { useUserBranch } from '@/hooks/useUserBranch';
+import { branchDbValuesForUiBranch } from '@/lib/branchFilters';
 import { formatEGP } from '@/data/demo-data';
+import { invoiceCustomerCredit, invoiceDebtRemaining } from '@/lib/invoiceBalance';
+
+const formatDateDisplay = (v: any) => { const s = String(v || ''); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : s; };
 
 type Customer = { id: string; name: string; phone1: string; created_at?: string };
-type Invoice = { id: string; customer_name: string; amount: number; remaining: number; status: string; date: string };
+type Invoice = { id: string; customer_name: string; amount: number; paid: number; remaining: number; status: string; date: string };
 type Maintenance = { id: string; customer_name: string; type: string; next_date: string; status: string };
 type WorkOrder = { id: string; customer_name: string; order_code: string; visit_date: string; status: string };
 
@@ -23,11 +27,12 @@ export default function CustomerServiceDashboardPage() {
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
+      const bv = branchDbValuesForUiBranch(branch);
       const [customersRes, invoicesRes, maintenanceRes, workOrdersRes] = await Promise.all([
-        supabase.from('customers').select('*').eq('branch', branch).order('created_at', { ascending: false }).limit(6),
-        supabase.from('invoices').select('*').eq('branch', branch).order('created_at', { ascending: false }).limit(8),
-        supabase.from('maintenance').select('*').eq('branch', branch).order('next_date', { ascending: true }).limit(8),
-        supabase.from('work_orders').select('*').eq('branch', branch).order('created_at', { ascending: false }).limit(8),
+        supabase.from('customers').select('*').in('branch', bv).order('created_at', { ascending: false }).limit(6),
+        supabase.from('invoices').select('*').in('branch', bv).order('created_at', { ascending: false }).limit(8),
+        supabase.from('maintenance').select('*').in('branch', bv).order('next_date', { ascending: true }).limit(8),
+        supabase.from('work_orders').select('*').in('branch', bv).order('created_at', { ascending: false }).limit(8),
       ]);
 
       setCustomers((customersRes.data || []) as Customer[]);
@@ -48,7 +53,7 @@ export default function CustomerServiceDashboardPage() {
     return {
       customers: customers.length,
       pendingInvoices: pendingInvoices.length,
-      pendingAmount: pendingInvoices.reduce((sum, inv) => sum + (inv.remaining || 0), 0),
+      pendingAmount: pendingInvoices.reduce((sum, inv) => sum + invoiceDebtRemaining(inv.amount, inv.paid), 0),
       upcomingMaintenance: upcomingMaintenance.length,
       openOrders: openOrders.length,
     };
@@ -114,8 +119,12 @@ export default function CustomerServiceDashboardPage() {
                     <Badge variant={invoice.status === 'partial' ? 'secondary' : 'outline'}>{invoice.status}</Badge>
                   </div>
                   <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                    <span>{invoice.date}</span>
-                    <span>المتبقي: {formatEGP(invoice.remaining || 0)}</span>
+                    <span>{formatDateDisplay(invoice.date)}</span>
+                    <span>
+                      {invoiceCustomerCredit(invoice.amount, invoice.paid) > 0
+                        ? `رصيد للعميل: ${formatEGP(invoiceCustomerCredit(invoice.amount, invoice.paid))}`
+                        : `المتبقي: ${formatEGP(invoiceDebtRemaining(invoice.amount, invoice.paid))}`}
+                    </span>
                   </div>
                 </div>
               ))}
@@ -135,7 +144,7 @@ export default function CustomerServiceDashboardPage() {
                   </div>
                   <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
                     <Clock3 className="h-3.5 w-3.5" />
-                    <span>{item.next_date}</span>
+                    <span>{formatDateDisplay(item.next_date)}</span>
                     <span>•</span>
                     <span>{item.type}</span>
                   </div>

@@ -39,6 +39,16 @@ async function createUser({
     return getUserWithProfile(userId);
   } catch (error) {
     await connection.rollback();
+    const msg = String(error?.message || "");
+    if (error?.code === "ER_DUP_ENTRY" || /Duplicate entry/i.test(msg)) {
+      const err = new Error("البريد الإلكتروني مستخدم بالفعل");
+      err.code = "ER_DUP_ENTRY";
+      throw err;
+    }
+    if (/Data truncated for column 'role'|Incorrect .*role/i.test(msg)) {
+      const err = new Error("نوع الصلاحية غير مدعوم في قاعدة البيانات — حدّث جدول user_roles");
+      throw err;
+    }
     throw error;
   } finally {
     connection.release();

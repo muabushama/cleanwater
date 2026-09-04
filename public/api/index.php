@@ -17,6 +17,9 @@ date_default_timezone_set($config['timezone'] ?? 'UTC');
 $jsonFields = [
     'customer_devices' => ['candles'],
     'work_orders' => ['items', 'previous_visits'],
+    'maintenance' => ['next_dates'],
+    'purchases' => ['items'],
+    'station_maintenance' => ['product_lines', 'changed_candles'],
 ];
 
 $defaultCandles = [
@@ -43,6 +46,24 @@ $tableRules = [
     'work_orders' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
     'rep_locations' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'admin', 'delete' => 'admin'],
     'system_settings' => ['authRequired' => true, 'select' => 'admin', 'insert' => 'admin', 'update' => 'admin', 'delete' => 'admin'],
+    // جداول إضافية مستخدمة في التطبيق ويجب السماح بها أيضاً
+    'areas' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'stock_movements' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'admin', 'delete' => 'admin'],
+    'inventory_categories' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'admin', 'update' => 'admin', 'delete' => 'admin'],
+    'expenses' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'purchases' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'returns' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'receipt_vouchers' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'payment_vouchers' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'banks' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'bank_accounts' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'invoice_lines' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'stations' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'station_maintenance' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'station_contract_installments' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'candle_types' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'rep_inventory' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'rep_inventory_transfers' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
 ];
 
 $deleteAllOrder = [
@@ -57,7 +78,7 @@ $deleteAllOrder = [
     'products',
 ];
 
-$assignableRoles = ['admin', 'sales_rep', 'customer_service'];
+$assignableRoles = ['admin', 'sales_rep', 'customer_service', 'warehouse_keeper'];
 
 function sendJson(int $status, array $payload): void
 {
@@ -220,7 +241,143 @@ function db(array $config): PDO
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);
 
+    oasisEnsureMysqlSchema($pdo);
+
     return $pdo;
+}
+
+/**
+ * إضافة أعمدة/جداول ناقصة (مثل sku_code) — يُنفَّذ مرة واحدة لكل عملية PHP.
+ */
+function oasisEnsureMysqlSchema(PDO $pdo): void
+{
+    static $done = false;
+    if ($done) {
+        return;
+    }
+    $done = true;
+
+    $creates = [
+        "CREATE TABLE IF NOT EXISTS areas (id VARCHAR(36) PRIMARY KEY, name VARCHAR(191) NOT NULL, parent_id VARCHAR(36) NULL, branch VARCHAR(191) NOT NULL DEFAULT 'فرع الإسكندرية', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY idx_areas_branch (branch), KEY idx_areas_parent (parent_id))",
+        "CREATE TABLE IF NOT EXISTS stock_movements (id VARCHAR(36) PRIMARY KEY, product_id VARCHAR(36) NOT NULL, branch VARCHAR(191) NOT NULL DEFAULT 'فرع الإسكندرية', type VARCHAR(50) NOT NULL DEFAULT 'sale', quantity INT NOT NULL DEFAULT 0, unit_cost DECIMAL(12,2) NOT NULL DEFAULT 0, movement_date DATE NULL, warehouse_id VARCHAR(36) NULL, technician_user_id VARCHAR(36) NULL, reference_type VARCHAR(50) NULL, reference_id VARCHAR(36) NULL, notes TEXT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY idx_sm_product (product_id), KEY idx_sm_branch (branch))",
+        "CREATE TABLE IF NOT EXISTS inventory_categories (id VARCHAR(36) PRIMARY KEY, name VARCHAR(191) NOT NULL, icon_key VARCHAR(50) NOT NULL DEFAULT 'default', parent_id VARCHAR(36) NULL, sort_order INT NOT NULL DEFAULT 0, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY idx_inv_cat_parent (parent_id))",
+        "CREATE TABLE IF NOT EXISTS stations (id VARCHAR(36) PRIMARY KEY, name VARCHAR(191) NOT NULL, customer_id VARCHAR(36) NULL, customer_name VARCHAR(191) NOT NULL DEFAULT '', customer_phone VARCHAR(50) NULL, customer_address TEXT NULL, area VARCHAR(191) NULL, address TEXT NULL, station_type VARCHAR(100) NULL, capacity VARCHAR(191) NULL, install_date DATE NULL, warranty_months INT NOT NULL DEFAULT 12, warranty_end DATE NULL, contract_type VARCHAR(100) NOT NULL DEFAULT 'بدون عقد', contract_value DECIMAL(12,2) NOT NULL DEFAULT 0, contract_duration_months INT NOT NULL DEFAULT 0, contract_start_date DATE NULL, contract_end_date DATE NULL, contract_first_visit_date DATE NULL, contract_installments_count INT NOT NULL DEFAULT 0, contract_installment_interval_months INT NOT NULL DEFAULT 1, contract_first_installment_date DATE NULL, location TEXT NULL, branch VARCHAR(191) NOT NULL DEFAULT 'فرع الإسكندرية', status VARCHAR(50) NOT NULL DEFAULT 'active', notes TEXT NULL, created_by VARCHAR(36) NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY idx_stations_branch (branch))",
+        "CREATE TABLE IF NOT EXISTS station_maintenance (id VARCHAR(36) PRIMARY KEY, station_id VARCHAR(36) NOT NULL, maintenance_date DATE NOT NULL, maintenance_type VARCHAR(100) NOT NULL DEFAULT 'صيانة دورية', description TEXT NULL, parts_used TEXT NULL, parts_cost DECIMAL(12,2) NOT NULL DEFAULT 0, labor_cost DECIMAL(12,2) NOT NULL DEFAULT 0, total_cost DECIMAL(12,2) NOT NULL DEFAULT 0, total_sale DECIMAL(12,2) NOT NULL DEFAULT 0, collected DECIMAL(12,2) NOT NULL DEFAULT 0, product_lines JSON NULL, changed_candles JSON NULL, technician VARCHAR(191) NULL, notes TEXT NULL, branch VARCHAR(191) NOT NULL DEFAULT 'فرع الإسكندرية', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY idx_station_maint_station (station_id), KEY idx_station_maint_date (maintenance_date), KEY idx_station_maint_branch (branch))",
+        "CREATE TABLE IF NOT EXISTS station_contract_installments (id VARCHAR(36) PRIMARY KEY, station_id VARCHAR(36) NOT NULL, installment_date DATE NULL, amount DECIMAL(12,2) NOT NULL DEFAULT 0, status VARCHAR(100) NOT NULL DEFAULT 'معلق', collection_date DATE NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY idx_sci_station (station_id))",
+    ];
+    foreach ($creates as $sql) {
+        try {
+            $pdo->exec($sql);
+        } catch (Throwable $e) {
+            // ignore
+        }
+    }
+
+    $alters = [
+        ['products', 'sku_code', 'VARCHAR(64) NULL'],
+        ['products', 'barcode', 'VARCHAR(128) NULL'],
+        ['products', 'unit', "VARCHAR(32) NULL DEFAULT 'قطعة'"],
+        ['products', 'supplier_name', 'VARCHAR(191) NULL'],
+        ['products', 'description', 'TEXT NULL'],
+        ['products', 'serial_number', 'INT NULL'],
+        ['products', 'branch', "VARCHAR(191) NOT NULL DEFAULT 'فرع الإسكندرية'"],
+        ['products', 'storage_location', "VARCHAR(191) NOT NULL DEFAULT 'المخزن الرئيسي'"],
+        ['customers', 'customer_code', 'VARCHAR(64) NULL'],
+        ['customers', 'customer_type', "VARCHAR(50) NOT NULL DEFAULT 'sales'"],
+        ['customers', 'phone2', 'VARCHAR(50) NULL'],
+        ['customers', 'area_id', 'VARCHAR(36) NULL'],
+        ['invoices', 'quantity', 'INT NOT NULL DEFAULT 1'],
+        ['invoices', 'product_id', 'VARCHAR(36) NULL'],
+        ['invoices', 'rep_names', 'JSON NULL'],
+        ['invoices', 'due_date', 'DATE NULL'],
+        ['invoices', 'delivery_status', "VARCHAR(50) NOT NULL DEFAULT 'pending'"],
+        ['invoices', 'notes', 'TEXT NULL'],
+        ['invoices', 'subtotal', 'DECIMAL(12,2) NULL'],
+        ['invoices', 'discount_percent', 'DECIMAL(5,2) NOT NULL DEFAULT 0'],
+        ['invoices', 'discount_amount', 'DECIMAL(12,2) NOT NULL DEFAULT 0'],
+        ['invoices', 'tax_percent', 'DECIMAL(5,2) NOT NULL DEFAULT 0'],
+        ['invoices', 'tax_amount', 'DECIMAL(12,2) NOT NULL DEFAULT 0'],
+        ['invoices', 'auto_stock_deduct', 'TINYINT(1) NOT NULL DEFAULT 1'],
+        ['invoices', 'invoice_direction', "VARCHAR(50) NOT NULL DEFAULT 'مبيعات'"],
+        ['invoices', 'technician', 'VARCHAR(191) NULL'],
+        ['stock_movements', 'unit_cost', 'DECIMAL(12,2) NOT NULL DEFAULT 0'],
+        ['stock_movements', 'movement_date', 'DATE NULL'],
+        ['stock_movements', 'warehouse_id', 'VARCHAR(36) NULL'],
+        ['stock_movements', 'technician_user_id', 'VARCHAR(36) NULL'],
+        ['customer_devices', 'contract_value', 'DECIMAL(12,2) NOT NULL DEFAULT 0'],
+        ['customer_devices', 'contract_duration_months', 'INT NOT NULL DEFAULT 0'],
+        ['customer_devices', 'contract_start_date', 'DATE NULL'],
+        ['customer_devices', 'contract_end_date', 'DATE NULL'],
+        ['customer_devices', 'contract_first_visit_date', 'DATE NULL'],
+        ['customer_devices', 'contract_installment_interval_months', 'INT NOT NULL DEFAULT 1'],
+        ['customer_devices', 'first_installment_date', 'DATE NULL'],
+        ['customer_devices', 'installments_count', 'INT NULL'],
+        ['candle_changes', 'candle8', 'TINYINT(1) NOT NULL DEFAULT 0'],
+        ['candle_changes', 'candle9', 'TINYINT(1) NOT NULL DEFAULT 0'],
+        ['candle_changes', 'candle10', 'TINYINT(1) NOT NULL DEFAULT 0'],
+        ['maintenance', 'next_dates', 'JSON NULL'],
+        ['work_orders', 'area_id', 'VARCHAR(36) NULL'],
+        ['station_maintenance', 'total_sale', 'DECIMAL(12,2) NOT NULL DEFAULT 0'],
+        ['station_maintenance', 'product_lines', 'JSON NULL'],
+        ['station_maintenance', 'changed_candles', 'JSON NULL'],
+        ['purchases', 'paid', 'DECIMAL(12,2) NOT NULL DEFAULT 0'],
+        ['purchases', 'remaining', 'DECIMAL(12,2) NOT NULL DEFAULT 0'],
+        ['purchases', 'items', 'JSON NULL'],
+        ['purchases', 'invoice_file_url', 'TEXT NULL'],
+    ];
+    foreach ($alters as [$t, $c, $ddl]) {
+        try {
+            $pdo->exec("ALTER TABLE `{$t}` ADD COLUMN `{$c}` {$ddl}");
+        } catch (Throwable $e) {
+            // ignore duplicate/missing table
+        }
+    }
+
+    try {
+        $pdo->exec("ALTER TABLE `user_roles` MODIFY COLUMN `role` ENUM('admin','sales_rep','customer_service','warehouse_keeper','staff') NOT NULL");
+    } catch (Throwable $e) {
+        // ignore
+    }
+
+    $GLOBALS['oasis_mysql_table_cols'] = [];
+}
+
+function oasisMysqlTableColumns(PDO $pdo, string $table): array
+{
+    if (!isset($GLOBALS['oasis_mysql_table_cols'])) {
+        $GLOBALS['oasis_mysql_table_cols'] = [];
+    }
+    $key = $table;
+    if (isset($GLOBALS['oasis_mysql_table_cols'][$key])) {
+        return $GLOBALS['oasis_mysql_table_cols'][$key];
+    }
+    $safe = str_replace(['`', ';'], '', $table);
+    try {
+        $stmt = $pdo->query('SHOW COLUMNS FROM `' . $safe . '`');
+        $rows = $stmt->fetchAll();
+        $GLOBALS['oasis_mysql_table_cols'][$key] = array_map(static fn(array $r): string => (string)$r['Field'], $rows);
+    } catch (Throwable $e) {
+        $GLOBALS['oasis_mysql_table_cols'][$key] = [];
+    }
+
+    return $GLOBALS['oasis_mysql_table_cols'][$key];
+}
+
+function oasisFilterRowToTableColumns(PDO $pdo, string $table, array $row): array
+{
+    $cols = oasisMysqlTableColumns($pdo, $table);
+    if ($cols === []) {
+        return $row;
+    }
+    $flip = array_flip($cols);
+    $out = [];
+    foreach ($row as $k => $v) {
+        if (isset($flip[(string)$k])) {
+            $out[$k] = $v;
+        }
+    }
+
+    return $out;
 }
 
 function parseJsonBody(): array
@@ -307,6 +464,114 @@ function requireAdminRole(?array $user): void
     }
 }
 
+function branchScopedTables(): array
+{
+    return [
+        'customers',
+        'products',
+        'customer_devices',
+        'invoices',
+        'maintenance',
+        'work_orders',
+        'areas',
+        'stock_movements',
+        'purchases',
+        'returns',
+        'expenses',
+        'banks',
+        'bank_accounts',
+        'receipt_vouchers',
+        'payment_vouchers',
+        'stations',
+        'station_maintenance',
+        'station_contract_installments',
+        'candle_types',
+        'rep_inventory',
+    ];
+}
+
+function isBranchScopedTable(string $table): bool
+{
+    return in_array($table, branchScopedTables(), true);
+}
+
+function branchDisplayNameFromProfile(?string $branchId): string
+{
+    $id = ($branchId !== null && $branchId !== '') ? (string)$branchId : '1';
+    $map = [
+        '1' => 'فرع الإسكندرية',
+        '2' => 'فرع الجيزة',
+        'فرع الإسكندرية' => 'فرع الإسكندرية',
+        'فرع الجيزة' => 'فرع الجيزة',
+    ];
+
+    return $map[$id] ?? ($id !== '' ? $id : 'فرع الإسكندرية');
+}
+
+function enforcedBranchName(?array $user): ?string
+{
+    if ($user === null || !isset($user['profile']['branch_id'])) {
+        return null;
+    }
+
+    return branchDisplayNameFromProfile((string)$user['profile']['branch_id']);
+}
+
+/** Non-admin: force profile branch on queries. Admin: use filters from client (active branch in UI). */
+function mergeBranchScopeFilters(?array $user, string $table, array $filters): array
+{
+    if (!isBranchScopedTable($table)) {
+        return $filters;
+    }
+    if ($user === null || isAdmin($user)) {
+        return $filters;
+    }
+    $forced = enforcedBranchName($user);
+    if ($forced === null) {
+        return $filters;
+    }
+    $out = [];
+    foreach ($filters as $f) {
+        if (is_array($f) && ($f['field'] ?? '') === 'branch' && ($f['operator'] ?? '') === 'eq') {
+            continue;
+        }
+        $out[] = $f;
+    }
+    $out[] = ['field' => 'branch', 'operator' => 'eq', 'value' => $forced];
+
+    return $out;
+}
+
+function applyBranchScopeToInsertRow(string $table, array $row, ?array $user): array
+{
+    if (!isBranchScopedTable($table) || $user === null || isAdmin($user)) {
+        return $row;
+    }
+    $forced = enforcedBranchName($user);
+    if ($forced === null) {
+        return $row;
+    }
+    $row['branch'] = $forced;
+
+    return $row;
+}
+
+function applyBranchScopeToUpdateValues(string $table, array $values, ?array $user): array
+{
+    if (!isBranchScopedTable($table) || $user === null || isAdmin($user)) {
+        return $values;
+    }
+    $forced = enforcedBranchName($user);
+    if ($forced === null) {
+        return $values;
+    }
+    if (array_key_exists('branch', $values)) {
+        $values['branch'] = $forced;
+    }
+
+    return $values;
+}
+
 function parseTableRow(string $table, array $row, array $jsonFields, array $defaultCandles): array
 {
     foreach ($jsonFields[$table] ?? [] as $field) {
@@ -350,6 +615,12 @@ function buildWhere(array $filters): array
 
         if ($operator === 'eq') {
             $clauses[] = $field . ' = ?';
+            $params[] = $filter['value'] ?? null;
+            continue;
+        }
+
+        if ($operator === 'neq') {
+            $clauses[] = $field . ' <> ?';
             $params[] = $filter['value'] ?? null;
             continue;
         }
@@ -455,6 +726,18 @@ function createInstallments(PDO $pdo, array $deviceRow): void
     }
 }
 
+function mapUserCreateError(Throwable $e): string
+{
+    $msg = $e->getMessage();
+    if (str_contains($msg, 'Duplicate') || str_contains($msg, '1062')) {
+        return 'البريد الإلكتروني مستخدم بالفعل';
+    }
+    if (str_contains($msg, 'Data truncated for column') || str_contains($msg, 'role')) {
+        return 'نوع الصلاحية غير مدعوم في قاعدة البيانات — حدّث جدول user_roles';
+    }
+    return $msg !== '' ? $msg : 'تعذر إنشاء الحساب';
+}
+
 function createUser(PDO $pdo, string $email, string $password, string $fullName, string $branchId, string $phone, array $roles): array
 {
     $userId = generateUuid();
@@ -544,20 +827,29 @@ try {
     }
 
     if ($segments === ['api', 'auth', 'signup'] && $method === 'POST') {
+        $anyUsers = (int)$pdo->query('SELECT COUNT(*) FROM users')->fetchColumn();
+        if ($anyUsers > 0) {
+            sendJson(403, ['error' => 'إنشاء الحساب غير متاح من الواجهة الحالية. اطلب من الأدمن إنشاء الحساب من صفحة الموظفين.']);
+        }
+
         $email = trim((string)($body['email'] ?? ''));
         $password = (string)($body['password'] ?? '');
         $fullName = trim((string)($body['options']['data']['full_name'] ?? ''));
         $branchId = (string)($body['options']['data']['branch_id'] ?? '1');
         $phone = trim((string)($body['options']['data']['phone'] ?? ''));
-        $role = (string)($body['options']['data']['role'] ?? 'customer_service');
+        $role = (string)($body['options']['data']['role'] ?? 'admin');
         if (!in_array($role, $assignableRoles, true)) {
-            $role = 'customer_service';
+            $role = 'admin';
         }
         if ($email === '' || $password === '') {
             sendJson(400, ['error' => 'البيانات المطلوبة غير مكتملة']);
         }
 
-        $newUser = createUser($pdo, $email, $password, $fullName, $branchId, $phone, [$role]);
+        try {
+            $newUser = createUser($pdo, $email, $password, $fullName, $branchId, $phone, [$role]);
+        } catch (Throwable $e) {
+            sendJson(400, ['error' => mapUserCreateError($e)]);
+        }
         if ($role === 'admin') {
             upsertSetting($pdo, 'delete_password', $password);
         }
@@ -614,7 +906,53 @@ try {
             sendJson(400, ['error' => 'البيانات المطلوبة غير مكتملة']);
         }
 
-        $newUser = createUser($pdo, $email, $password, $fullName, $branchId, $phone, ['sales_rep']);
+        try {
+            $newUser = createUser($pdo, $email, $password, $fullName, $branchId, $phone, ['sales_rep']);
+        } catch (Throwable $e) {
+            sendJson(400, ['error' => mapUserCreateError($e)]);
+        }
+        sendJson(200, ['success' => true, 'user' => $newUser]);
+    }
+
+    if ($segments === ['api', 'auth', 'create-warehouse-keeper'] && $method === 'POST') {
+        requireAdminRole($user);
+
+        $email = trim((string)($body['email'] ?? ''));
+        $password = (string)($body['password'] ?? '');
+        $fullName = trim((string)($body['full_name'] ?? ''));
+        $branchId = (string)($body['branch_id'] ?? '1');
+        $phone = trim((string)($body['phone'] ?? ''));
+
+        if ($email === '' || $password === '' || $fullName === '') {
+            sendJson(400, ['error' => 'البيانات المطلوبة غير مكتملة']);
+        }
+
+        try {
+            $newUser = createUser($pdo, $email, $password, $fullName, $branchId, $phone, ['warehouse_keeper']);
+        } catch (Throwable $e) {
+            sendJson(400, ['error' => mapUserCreateError($e)]);
+        }
+        sendJson(200, ['success' => true, 'user' => $newUser]);
+    }
+
+    if ($segments === ['api', 'auth', 'create-customer-service'] && $method === 'POST') {
+        requireAdminRole($user);
+
+        $email = trim((string)($body['email'] ?? ''));
+        $password = (string)($body['password'] ?? '');
+        $fullName = trim((string)($body['full_name'] ?? ''));
+        $branchId = (string)($body['branch_id'] ?? '1');
+        $phone = trim((string)($body['phone'] ?? ''));
+
+        if ($email === '' || $password === '' || $fullName === '') {
+            sendJson(400, ['error' => 'البيانات المطلوبة غير مكتملة']);
+        }
+
+        try {
+            $newUser = createUser($pdo, $email, $password, $fullName, $branchId, $phone, ['customer_service']);
+        } catch (Throwable $e) {
+            sendJson(400, ['error' => mapUserCreateError($e)]);
+        }
         sendJson(200, ['success' => true, 'user' => $newUser]);
     }
 
@@ -644,19 +982,30 @@ try {
         $functionName = $segments[2];
 
         if ($functionName === 'manage-users') {
-            if (($body['action'] ?? '') !== 'create_rep') {
+            $action = (string)($body['action'] ?? '');
+            $roleMap = [
+                'create_rep' => 'sales_rep',
+                'create_warehouse_keeper' => 'warehouse_keeper',
+                'create_customer_service' => 'customer_service',
+            ];
+            if (!isset($roleMap[$action])) {
                 sendJson(400, ['error' => 'Invalid action']);
             }
 
-            $newUser = createUser(
-                $pdo,
-                trim((string)($body['email'] ?? '')),
-                (string)($body['password'] ?? ''),
-                trim((string)($body['full_name'] ?? '')),
-                (string)($body['branch_id'] ?? '1'),
-                trim((string)($body['phone'] ?? '')),
-                ['sales_rep']
-            );
+            $email = trim((string)($body['email'] ?? ''));
+            $password = (string)($body['password'] ?? '');
+            $fullName = trim((string)($body['full_name'] ?? ''));
+            $branchId = (string)($body['branch_id'] ?? '1');
+            $phone = trim((string)($body['phone'] ?? ''));
+            if ($email === '' || $password === '' || $fullName === '') {
+                sendJson(400, ['error' => 'البيانات المطلوبة غير مكتملة']);
+            }
+
+            try {
+                $newUser = createUser($pdo, $email, $password, $fullName, $branchId, $phone, [$roleMap[$action]]);
+            } catch (Throwable $e) {
+                sendJson(400, ['error' => mapUserCreateError($e)]);
+            }
 
             sendJson(200, ['success' => true, 'user' => $newUser]);
         }
@@ -748,6 +1097,7 @@ try {
         if ($action === 'select') {
             $columns = (string)($body['columns'] ?? '*');
             $filters = is_array($body['filters'] ?? null) ? $body['filters'] : [];
+            $filters = mergeBranchScopeFilters($user, $table, $filters);
             $order = is_array($body['order'] ?? null) ? $body['order'] : null;
             $limit = (int)($body['limit'] ?? 0);
             $where = buildWhere($filters);
@@ -803,9 +1153,14 @@ try {
                         continue;
                     }
                     $row = normalizeInsertRow($table, $row, $user, $defaultCandles);
+                    $row = applyBranchScopeToInsertRow($table, $row, $user);
                     validateMutation($table, $row, $user);
                     $row = stringifyTablePayload($table, $row, $jsonFields, $defaultCandles);
+                    $row = oasisFilterRowToTableColumns($pdo, $table, $row);
                     $columns = array_keys($row);
+                    if ($columns === []) {
+                        throw new RuntimeException('No valid columns for insert');
+                    }
                     $placeholders = implode(', ', array_fill(0, count($columns), '?'));
                     $sql = 'INSERT INTO `' . $table . '` (' . implode(', ', array_map(static fn(string $col): string => '`' . $col . '`', $columns)) . ') VALUES (' . $placeholders . ')';
                     $stmt = $pdo->prepare($sql);
@@ -827,14 +1182,17 @@ try {
 
         if ($action === 'update') {
             $values = is_array($body['values'] ?? null) ? $body['values'] : [];
+            $values = applyBranchScopeToUpdateValues($table, $values, $user);
             validateMutation($table, $values, $user);
             $values = stringifyTablePayload($table, $values, $jsonFields, $defaultCandles);
+            $values = oasisFilterRowToTableColumns($pdo, $table, $values);
             $fields = array_keys($values);
             if ($fields === []) {
                 sendJson(400, ['data' => null, 'error' => ['message' => 'No values provided']]);
             }
 
-            $where = buildWhere(is_array($body['filters'] ?? null) ? $body['filters'] : []);
+            $scopedFilters = mergeBranchScopeFilters($user, $table, is_array($body['filters'] ?? null) ? $body['filters'] : []);
+            $where = buildWhere($scopedFilters);
             $setClause = implode(', ', array_map(static fn(string $field): string => '`' . $field . '` = ?', $fields));
             $sql = 'UPDATE `' . $table . '` SET ' . $setClause . $where['sql'];
 
@@ -853,7 +1211,8 @@ try {
         }
 
         if ($action === 'delete') {
-            $where = buildWhere(is_array($body['filters'] ?? null) ? $body['filters'] : []);
+            $scopedFilters = mergeBranchScopeFilters($user, $table, is_array($body['filters'] ?? null) ? $body['filters'] : []);
+            $where = buildWhere($scopedFilters);
             if ($where['sql'] === '') {
                 sendJson(400, ['data' => null, 'error' => ['message' => 'Delete requires filters']]);
             }

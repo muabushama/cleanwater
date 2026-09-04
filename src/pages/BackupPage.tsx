@@ -125,6 +125,9 @@ export default function BackupPage() {
           <Shield className="h-6 w-6 text-primary" /> النسخ الاحتياطي
         </h1>
         <p className="text-muted-foreground text-sm">إدارة النسخ الاحتياطية وحماية البيانات</p>
+        <p className="text-xs text-primary mt-1">
+          تلقائي: طالما حساب الأدمن مفتوح على هذا الجهاز، يُحمَّل ملف نسخة احتياطية تلقائياً كل يوم عند منتصف الليل (12:00 ص).
+        </p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">

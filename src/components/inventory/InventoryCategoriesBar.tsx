@@ -15,6 +15,8 @@ interface InventoryCategoriesBarProps {
   onSelectCategory: (id: string | null) => void;
   /** Flatten list: show roots and their children as separate cards (optional) */
   flat?: boolean;
+  /** cards = شبكة أيقونات، strip = شريط تبويب أفقي (فئات رئيسية فقط) */
+  variant?: 'cards' | 'strip';
   className?: string;
 }
 
@@ -23,6 +25,7 @@ export function InventoryCategoriesBar({
   selectedCategoryId,
   onSelectCategory,
   flat = false,
+  variant = 'cards',
   className = '',
 }: InventoryCategoriesBarProps) {
   const roots = categories.filter(c => !c.parent_id);
@@ -31,6 +34,41 @@ export function InventoryCategoriesBar({
   const itemsToShow: { id: string; name: string; icon_key?: string | null }[] = flat
     ? roots.flatMap(r => [r, ...getChildren(r.id)])
     : roots;
+
+  if (variant === 'strip') {
+    return (
+      <div className={`flex gap-2 overflow-x-auto pb-1 pt-0.5 scrollbar-thin ${className}`} dir="rtl">
+        <button
+          type="button"
+          onClick={() => onSelectCategory(null)}
+          className={`shrink-0 rounded-full px-4 py-2 text-sm font-medium border-2 transition-all ${
+            selectedCategoryId === null
+              ? 'bg-primary text-primary-foreground border-primary shadow-md'
+              : 'bg-card border-border hover:border-primary/40'
+          }`}
+        >
+          الكل
+        </button>
+        {roots.map(cat => {
+          const selected = selectedCategoryId === cat.id;
+          return (
+            <button
+              key={cat.id}
+              type="button"
+              onClick={() => onSelectCategory(selected ? null : cat.id)}
+              className={`shrink-0 rounded-full px-4 py-2 text-sm font-medium border-2 transition-all whitespace-nowrap ${
+                selected
+                  ? 'bg-primary text-primary-foreground border-primary shadow-md'
+                  : 'bg-card border-border hover:border-primary/40'
+              }`}
+            >
+              {cat.name}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
 
   return (
     <div className={`flex flex-wrap gap-3 ${className}`} dir="rtl">

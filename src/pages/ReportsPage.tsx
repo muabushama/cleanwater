@@ -7,15 +7,21 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend } from 'recharts';
 import { useRef } from 'react';
-import { TrendingUp, Users, FileText, Wrench, DollarSign, Package, AlertTriangle, UserCheck, Activity, Calendar, Download, Printer } from 'lucide-react';
+import { TrendingUp, Users, FileText, Wrench, DollarSign, Package, AlertTriangle, UserCheck, Activity, Calendar, Download, Printer, ShoppingCart } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { invoiceCustomerCredit, invoiceDebtRemaining } from '@/lib/invoiceBalance';
+
+const formatDateDisplay = (v?: string | null) => { const s = String(v || ''); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : s; };
+import { useUserBranch } from '@/hooks/useUserBranch';
+import { branchDbValuesForUiBranch } from '@/lib/branchFilters';
 
 const COLORS = ['hsl(210 80% 30%)', 'hsl(174 60% 40%)', 'hsl(38 92% 50%)', 'hsl(152 60% 40%)', 'hsl(0 72% 51%)'];
 
 export default function ReportsPage() {
+  const { branch } = useUserBranch();
   const [invoices, setInvoices] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
   const [maintenance, setMaintenance] = useState<any[]>([]);
@@ -29,6 +35,9 @@ export default function ReportsPage() {
   const [reportCustomerId, setReportCustomerId] = useState<string>('none');
   const [reportProductId, setReportProductId] = useState<string>('none');
   const [reportVisitsCustomerId, setReportVisitsCustomerId] = useState<string>('none');
+  const [reportCustomerSearch, setReportCustomerSearch] = useState('');
+  const [reportProductSearch, setReportProductSearch] = useState('');
+  const [reportVisitsCustomerSearch, setReportVisitsCustomerSearch] = useState('');
   const [statementDateFrom, setStatementDateFrom] = useState('');
   const [statementDateTo, setStatementDateTo] = useState('');
   const [productMovementDateFrom, setProductMovementDateFrom] = useState('');
@@ -36,21 +45,52 @@ export default function ReportsPage() {
   const [visitsDateFrom, setVisitsDateFrom] = useState('');
   const [visitsDateTo, setVisitsDateTo] = useState('');
   const [visitsTechnician, setVisitsTechnician] = useState<string>('none');
+  const [visitsTechnicianSearch, setVisitsTechnicianSearch] = useState('');
   const statementPrintRef = useRef<HTMLDivElement>(null);
   const productMovementPrintRef = useRef<HTMLDivElement>(null);
   const visitsPrintRef = useRef<HTMLDivElement>(null);
+  const technicianOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [...workOrders.map(w => w.technician), ...maintenance.map(m => m.technician), ...candleChanges.map(c => c.technician)].filter(Boolean),
+        ),
+      ) as string[],
+    [workOrders, maintenance, candleChanges],
+  );
+  const filteredReportCustomers = useMemo(() => {
+    const term = reportCustomerSearch.trim().toLowerCase();
+    if (!term) return customers;
+    return customers.filter(c => String(c.name || '').toLowerCase().includes(term) || String(c.phone1 || '').toLowerCase().includes(term));
+  }, [customers, reportCustomerSearch]);
+  const filteredReportProducts = useMemo(() => {
+    const term = reportProductSearch.trim().toLowerCase();
+    if (!term) return products;
+    return products.filter(p => String(p.name || '').toLowerCase().includes(term));
+  }, [products, reportProductSearch]);
+  const filteredVisitsCustomers = useMemo(() => {
+    const term = reportVisitsCustomerSearch.trim().toLowerCase();
+    if (!term) return customers;
+    return customers.filter(c => String(c.name || '').toLowerCase().includes(term) || String(c.phone1 || '').toLowerCase().includes(term));
+  }, [customers, reportVisitsCustomerSearch]);
+  const filteredTechnicians = useMemo(() => {
+    const term = visitsTechnicianSearch.trim().toLowerCase();
+    if (!term) return technicianOptions;
+    return technicianOptions.filter(t => t.toLowerCase().includes(term));
+  }, [technicianOptions, visitsTechnicianSearch]);
 
   useEffect(() => {
     const fetchAll = async () => {
       const db = supabase as any;
+      const bVals = branchDbValuesForUiBranch(branch);
       const [invR, custR, maintR, woR, prodR, devR, movR, instR, ccR] = await Promise.all([
-        supabase.from('invoices').select('*'),
-        supabase.from('customers').select('*'),
-        supabase.from('maintenance').select('*'),
-        supabase.from('work_orders').select('*'),
-        supabase.from('products').select('*'),
-        db.from('customer_devices').select('*'),
-        supabase.from('stock_movements').select('*').order('created_at', { ascending: false }).limit(2000),
+        supabase.from('invoices').select('*').in('branch', bVals),
+        supabase.from('customers').select('*').in('branch', bVals),
+        supabase.from('maintenance').select('*').in('branch', bVals),
+        supabase.from('work_orders').select('*').in('branch', bVals),
+        supabase.from('products').select('*').in('branch', bVals),
+        db.from('customer_devices').select('*').in('branch', bVals),
+        supabase.from('stock_movements').select('*').in('branch', bVals).order('created_at', { ascending: false }).limit(2000),
         supabase.from('installments').select('*').limit(2000),
         db.from('candle_changes').select('*').order('change_date', { ascending: false }).limit(2000),
       ]);
@@ -66,14 +106,15 @@ export default function ReportsPage() {
       setLoading(false);
     };
     fetchAll();
-  }, []);
+  }, [branch]);
 
   // Derived analytics
   const analytics = useMemo(() => {
     const activeInv = invoices.filter(i => i.status !== 'deleted');
     const totalSales = activeInv.reduce((s, i) => s + (i.amount || 0), 0);
     const totalPaid = activeInv.reduce((s, i) => s + (i.paid || 0), 0);
-    const totalRemaining = activeInv.reduce((s, i) => s + (i.remaining || 0), 0);
+    const totalRemaining = activeInv.reduce((s, i) => s + invoiceDebtRemaining(i.amount, i.paid), 0);
+    const totalCustomerCredit = activeInv.reduce((s, i) => s + invoiceCustomerCredit(i.amount, i.paid), 0);
     const paidInvoices = activeInv.filter(i => i.status === 'paid').length;
     const pendingInvoices = activeInv.filter(i => i.status === 'pending').length;
     const partialInvoices = activeInv.filter(i => i.status === 'partial').length;
@@ -85,7 +126,7 @@ export default function ReportsPage() {
       if (!branchMap[b]) branchMap[b] = { sales: 0, customers: new Set(), invoices: 0, paid: 0, remaining: 0 };
       branchMap[b].sales += inv.amount || 0;
       branchMap[b].paid += inv.paid || 0;
-      branchMap[b].remaining += inv.remaining || 0;
+      branchMap[b].remaining += invoiceDebtRemaining(inv.amount, inv.paid);
       branchMap[b].invoices++;
       if (inv.customer_name) branchMap[b].customers.add(inv.customer_name);
     });
@@ -147,16 +188,32 @@ export default function ReportsPage() {
     // Low stock
     const lowStock = products.filter(p => p.stock <= p.min_stock);
 
+    // مشتريات الفروع (من حركات المخزون نوع purchase)
+    const productById: Record<string, { cost?: number }> = {};
+    products.forEach((p: any) => { productById[p.id] = { cost: p.cost ?? 0 }; });
+    let purchasesAlex = 0;
+    let purchasesCairo = 0;
+    (stockMovements || []).forEach((m: any) => {
+      if (m.type !== 'purchase') return;
+      const cost = productById[m.product_id]?.cost ?? 0;
+      const value = (Number(m.quantity) || 0) * cost;
+      const branch = (m.branch || '').trim();
+      if (branch.includes('الإسكندرية')) purchasesAlex += value;
+      if (branch.includes('القاهرة') || branch.includes('الجيزة')) purchasesCairo += value;
+    });
+
     return {
-      totalSales, totalPaid, totalRemaining, paidInvoices, pendingInvoices, partialInvoices,
+      totalSales, totalPaid, totalRemaining, totalCustomerCredit, paidInvoices, pendingInvoices, partialInvoices,
       branchData, monthlyData, statusPie, productData, repData,
       overdueMaint, upcomingMaint, completedMaint,
       pendingWO, completedWO, inProgressWO,
       lowStock,
       totalCustomers: customers.length,
       totalDevices: devices.length,
+      purchasesAlex,
+      purchasesCairo,
     };
-  }, [invoices, customers, maintenance, workOrders, products, devices]);
+  }, [invoices, customers, maintenance, workOrders, products, devices, stockMovements]);
 
   if (loading) return <p className="text-muted-foreground text-center py-12">جاري تحميل التقارير...</p>;
 
@@ -165,11 +222,12 @@ export default function ReportsPage() {
       <h1 className="text-2xl font-bold">التقارير والتحليلات</h1>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
         {[
           { icon: DollarSign, label: 'إجمالي المبيعات', value: formatEGP(analytics.totalSales), color: 'gradient-card-blue' },
           { icon: DollarSign, label: 'المحصل', value: formatEGP(analytics.totalPaid), color: 'gradient-card-success' },
-          { icon: AlertTriangle, label: 'المتبقي', value: formatEGP(analytics.totalRemaining), color: 'gradient-card-warning' },
+          { icon: AlertTriangle, label: 'متبقي على العملاء', value: formatEGP(analytics.totalRemaining), color: 'gradient-card-warning' },
+          { icon: TrendingUp, label: 'رصيد عملاء (+)', value: formatEGP(analytics.totalCustomerCredit), color: 'bg-emerald-700 border-0' },
           { icon: Users, label: 'العملاء', value: analytics.totalCustomers.toString(), color: 'gradient-card-teal' },
           { icon: FileText, label: 'الفواتير', value: invoices.filter(i => i.status !== 'deleted').length.toString(), color: 'gradient-card-blue' },
           { icon: Package, label: 'الأجهزة', value: analytics.totalDevices.toString(), color: 'gradient-card-teal' },
@@ -192,6 +250,7 @@ export default function ReportsPage() {
           <TabsTrigger value="products" className="text-xs">المنتجات</TabsTrigger>
           <TabsTrigger value="reps" className="text-xs">المناديب</TabsTrigger>
           <TabsTrigger value="operations" className="text-xs">العمليات</TabsTrigger>
+          <TabsTrigger value="financial" className="text-xs gap-1"><DollarSign className="h-3 w-3" /> المالية</TabsTrigger>
           <TabsTrigger value="client-statement" className="text-xs gap-1"><UserCheck className="h-3 w-3" /> كشف حساب عميل</TabsTrigger>
           <TabsTrigger value="product-movement" className="text-xs gap-1"><Activity className="h-3 w-3" /> كشف حركة منتج</TabsTrigger>
           <TabsTrigger value="client-visits" className="text-xs gap-1"><Calendar className="h-3 w-3" /> كشف زيارات عميل</TabsTrigger>
@@ -253,7 +312,7 @@ export default function ReportsPage() {
                       <Legend wrapperStyle={{ fontSize: 11 }} />
                       <Bar dataKey="sales" fill="hsl(210 80% 30%)" name="المبيعات" radius={[4, 4, 0, 0]} />
                       <Bar dataKey="paid" fill="hsl(152 60% 40%)" name="المحصل" radius={[4, 4, 0, 0]} />
-                      <Bar dataKey="remaining" fill="hsl(0 72% 51%)" name="المتبقي" radius={[4, 4, 0, 0]} />
+                      <Bar dataKey="remaining" fill="hsl(0 72% 51%)" name="متبقي على العملاء" radius={[4, 4, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 ) : <p className="text-sm text-muted-foreground text-center py-8">لا توجد بيانات</p>}
@@ -272,7 +331,7 @@ export default function ReportsPage() {
                       <div className="grid grid-cols-3 gap-2 text-xs">
                         <div><span className="text-muted-foreground">المبيعات: </span><span className="font-bold">{formatEGP(b.sales)}</span></div>
                         <div><span className="text-muted-foreground">المحصل: </span><span className="font-bold text-secondary">{formatEGP(b.paid)}</span></div>
-                        <div><span className="text-muted-foreground">المتبقي: </span><span className="font-bold text-destructive">{formatEGP(b.remaining)}</span></div>
+                        <div><span className="text-muted-foreground">متبقي على العملاء: </span><span className="font-bold text-destructive">{formatEGP(b.remaining)}</span></div>
                       </div>
                       <div className="text-xs text-muted-foreground">{b.customers} عميل</div>
                     </div>
@@ -390,11 +449,12 @@ export default function ReportsPage() {
               <div className="flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-2">
                   <Label className="text-xs">العميل</Label>
+                  <Input value={reportCustomerSearch} onChange={e => setReportCustomerSearch(e.target.value)} placeholder="بحث عميل..." className="w-[180px]" />
                   <Select value={reportCustomerId} onValueChange={setReportCustomerId}>
                     <SelectTrigger className="w-[240px]"><SelectValue placeholder="اختر عميلاً" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">اختر عميلاً</SelectItem>
-                      {customers.map(c => (<SelectItem key={c.id} value={c.id}>{c.name} - {c.phone1}</SelectItem>))}
+                      {filteredReportCustomers.map(c => (<SelectItem key={c.id} value={c.id}>{c.name} - {c.phone1}</SelectItem>))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -427,7 +487,8 @@ export default function ReportsPage() {
                 rows.forEach(r => { running += r.debit - r.credit; r.balance = running; });
                 const totalIn = custInvoices.reduce((s, i) => s + (i.amount || 0), 0);
                 const totalPaid = custInvoices.reduce((s, i) => s + (i.paid || 0), 0);
-                const remaining = totalIn - totalPaid;
+                const debtOnCustomer = Math.max(0, Math.round((totalIn - totalPaid) * 100) / 100);
+                const creditForCustomer = Math.max(0, Math.round((totalPaid - totalIn) * 100) / 100);
                 const exportCsv = () => {
                   const BOM = '\uFEFF';
                   const header = 'التاريخ,الرقم,النوع,مدين,دائن,الرصيد\n';
@@ -439,10 +500,11 @@ export default function ReportsPage() {
                 return (
                   <div className="space-y-2 border rounded-lg p-4">
                     <p className="font-bold">{cust?.name}</p>
-                    <div className="grid grid-cols-3 gap-2 text-sm mb-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm mb-2">
                       <div><span className="text-muted-foreground">إجمالي الفواتير:</span> <span className="font-bold">{formatEGP(totalIn)}</span></div>
                       <div><span className="text-muted-foreground">المدفوع:</span> <span className="font-bold text-secondary">{formatEGP(totalPaid)}</span></div>
-                      <div><span className="text-muted-foreground">المتبقي:</span> <span className="font-bold text-destructive">{formatEGP(remaining)}</span></div>
+                      <div><span className="text-muted-foreground">متبقي على العميل:</span> <span className="font-bold text-destructive">{formatEGP(debtOnCustomer)}</span></div>
+                      <div><span className="text-muted-foreground">رصيد للعميل (+):</span> <span className="font-bold text-emerald-700">{formatEGP(creditForCustomer)}</span></div>
                     </div>
                     <div className="flex flex-wrap gap-2 mb-2">
                       <Button variant="outline" size="sm" className="gap-1" onClick={exportCsv}><Download className="h-4 w-4" /> تصدير Excel</Button>
@@ -453,7 +515,7 @@ export default function ReportsPage() {
                         <thead><tr className="bg-muted/50"><th className="p-2 text-right">التاريخ</th><th className="p-2 text-right">رقم الفاتورة</th><th className="p-2 text-right">النوع</th><th className="p-2 text-right">مدين</th><th className="p-2 text-right">دائن</th><th className="p-2 text-right">الرصيد</th></tr></thead>
                         <tbody>
                           {rows.map((r, i) => (
-                            <tr key={i} className="border-b"><td className="p-2">{r.date}</td><td className="p-2">{r.ref}</td><td className="p-2">{r.type}</td><td className="p-2">{r.debit ? formatEGP(r.debit) : '-'}</td><td className="p-2">{r.credit ? formatEGP(r.credit) : '-'}</td><td className="p-2 font-medium">{formatEGP(r.balance)}</td></tr>
+                            <tr key={i} className="border-b"><td className="p-2">{formatDateDisplay(r.date)}</td><td className="p-2">{r.ref}</td><td className="p-2">{r.type}</td><td className="p-2">{r.debit ? formatEGP(r.debit) : '-'}</td><td className="p-2">{r.credit ? formatEGP(r.credit) : '-'}</td><td className="p-2 font-medium">{formatEGP(r.balance)}</td></tr>
                           ))}
                         </tbody>
                       </table>
@@ -474,11 +536,12 @@ export default function ReportsPage() {
               <div className="flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-2">
                   <Label className="text-xs">المنتج</Label>
+                  <Input value={reportProductSearch} onChange={e => setReportProductSearch(e.target.value)} placeholder="بحث منتج..." className="w-[180px]" />
                   <Select value={reportProductId} onValueChange={setReportProductId}>
                     <SelectTrigger className="w-[240px]"><SelectValue placeholder="اختر منتجاً" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">اختر منتجاً</SelectItem>
-                      {products.map(p => (<SelectItem key={p.id} value={p.id}>{p.name} (مخزون: {p.stock})</SelectItem>))}
+                      {filteredReportProducts.map(p => (<SelectItem key={p.id} value={p.id}>{p.name} (مخزون: {p.stock})</SelectItem>))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -521,7 +584,7 @@ export default function ReportsPage() {
                         <tbody>
                           {rows.map((r, i) => (
                             <tr key={i} className="border-b">
-                              <td className="p-2">{r.date}</td><td className="p-2">{prod?.name}</td><td className="p-2">{r.type}</td>
+                              <td className="p-2">{formatDateDisplay(r.date)}</td><td className="p-2">{prod?.name}</td><td className="p-2">{r.type}</td>
                               <td className="p-2">{r.qtyIn}</td><td className="p-2">{r.qtyOut}</td><td className="p-2">{r.ref}</td><td className="p-2">{r.user || '-'}</td>
                             </tr>
                           ))}
@@ -544,21 +607,23 @@ export default function ReportsPage() {
               <div className="flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-2">
                   <Label className="text-xs">العميل</Label>
+                  <Input value={reportVisitsCustomerSearch} onChange={e => setReportVisitsCustomerSearch(e.target.value)} placeholder="بحث عميل..." className="w-[180px]" />
                   <Select value={reportVisitsCustomerId} onValueChange={setReportVisitsCustomerId}>
                     <SelectTrigger className="w-[240px]"><SelectValue placeholder="اختر عميلاً" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">الكل</SelectItem>
-                      {customers.map(c => (<SelectItem key={c.id} value={c.id}>{c.name} - {c.phone1}</SelectItem>))}
+                      {filteredVisitsCustomers.map(c => (<SelectItem key={c.id} value={c.id}>{c.name} - {c.phone1}</SelectItem>))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="flex items-center gap-2">
                   <Label className="text-xs">الفني</Label>
+                  <Input value={visitsTechnicianSearch} onChange={e => setVisitsTechnicianSearch(e.target.value)} placeholder="بحث فني..." className="w-[150px]" />
                   <Select value={visitsTechnician} onValueChange={setVisitsTechnician}>
                     <SelectTrigger className="w-[180px]"><SelectValue placeholder="الكل" /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">الكل</SelectItem>
-                      {Array.from(new Set([...workOrders.map(w => w.technician), ...maintenance.map(m => m.technician), ...candleChanges.map(c => c.technician)].filter(Boolean))).map(t => (<SelectItem key={t} value={t}>{t}</SelectItem>))}
+                      {filteredTechnicians.map(t => (<SelectItem key={t} value={t}>{t}</SelectItem>))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -609,7 +674,7 @@ export default function ReportsPage() {
                         <thead><tr className="bg-muted/50"><th className="p-2 text-right">التاريخ</th><th className="p-2 text-right">العميل</th><th className="p-2 text-right">الفني</th><th className="p-2 text-right">نوع الزيارة</th><th className="p-2 text-right">ملاحظات</th><th className="p-2 text-right">الزيارة القادمة</th></tr></thead>
                         <tbody>
                           {rows.map((r, i) => (
-                            <tr key={i} className="border-b"><td className="p-2">{r.date}</td><td className="p-2">{r.customer}</td><td className="p-2">{r.technician}</td><td className="p-2">{r.type}</td><td className="p-2">{r.notes}</td><td className="p-2">{r.nextVisit}</td></tr>
+                            <tr key={i} className="border-b"><td className="p-2">{formatDateDisplay(r.date)}</td><td className="p-2">{r.customer}</td><td className="p-2">{r.technician}</td><td className="p-2">{r.type}</td><td className="p-2">{r.notes}</td><td className="p-2">{formatDateDisplay(r.nextVisit)}</td></tr>
                           ))}
                         </tbody>
                       </table>
@@ -691,6 +756,30 @@ export default function ReportsPage() {
                     ))}
                   </div>
                 )}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* المالية: مشتريات الفروع */}
+        <TabsContent value="financial" className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <Card className="card-shadow">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2"><ShoppingCart className="h-4 w-4" /> مشتريات فرع الإسكندرية</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold text-primary">{formatEGP(analytics.purchasesAlex)}</p>
+                <p className="text-xs text-muted-foreground mt-1">إجمالي قيمة حركات المشتريات (وارد) للفرع</p>
+              </CardContent>
+            </Card>
+            <Card className="card-shadow">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2"><ShoppingCart className="h-4 w-4" /> مشتريات فرع القاهرة</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-2xl font-bold text-primary">{formatEGP(analytics.purchasesCairo)}</p>
+                <p className="text-xs text-muted-foreground mt-1">إجمالي قيمة حركات المشتريات (وارد) للفرع — يشمل فرع الجيزة إن وُجد</p>
               </CardContent>
             </Card>
           </div>

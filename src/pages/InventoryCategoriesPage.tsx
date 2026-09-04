@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
+import { useUserBranch } from '@/hooks/useUserBranch';
+import { branchDbValuesForUiBranch } from '@/lib/branchFilters';
 import { getCategoryIcon } from '@/components/inventory/CategoryIcon';
+import { promptDeletePassword } from '@/lib/deletePassword';
 
 interface InventoryCategory {
   id: string;
@@ -21,6 +24,7 @@ interface InventoryCategory {
 }
 
 export default function InventoryCategoriesPage() {
+  const { branch } = useUserBranch();
   const { toast } = useToast();
   const [categories, setCategories] = useState<InventoryCategory[]>([]);
   const [products, setProducts] = useState<{ id: string; category: string; classification: string }[]>([]);
@@ -30,13 +34,19 @@ export default function InventoryCategoriesPage() {
   const [editingCategory, setEditingCategory] = useState<InventoryCategory | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<InventoryCategory | null>(null);
   const [form, setForm] = useState({ name: '', icon_key: 'default', parent_id: '' as string, sort_order: 0 });
+  const [parentSearchAdd, setParentSearchAdd] = useState('');
+  const [parentSearchEdit, setParentSearchEdit] = useState('');
 
   const fetchData = async () => {
     setLoading(true);
     try {
       const [catRes, prodRes] = await Promise.all([
         supabase.from('inventory_categories').select('*').order('sort_order'),
-        supabase.from('products').select('id, category, classification').limit(5000),
+        supabase
+          .from('products')
+          .select('id, category, classification')
+          .in('branch', branchDbValuesForUiBranch(branch))
+          .limit(5000),
       ]);
       setCategories(Array.isArray(catRes.data) ? catRes.data : []);
       setProducts(Array.isArray(prodRes.data) ? prodRes.data : []);
@@ -47,10 +57,34 @@ export default function InventoryCategoriesPage() {
     setLoading(false);
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => { fetchData(); }, [branch]);
 
   const roots = categories.filter(c => !c.parent_id);
   const getChildren = (parentId: string) => categories.filter(c => c.parent_id === parentId);
+  const addParentOptions = useMemo(() => {
+    const base = [
+      ...roots.map(r => ({ id: r.id, label: `قسم: ${r.name}` })),
+      ...roots.flatMap(r => getChildren(r.id).map(c => ({ id: c.id, label: `— فرع: ${c.name}` }))),
+    ];
+    const term = parentSearchAdd.trim().toLowerCase();
+    if (!term) return base;
+    return base.filter(o => o.label.toLowerCase().includes(term));
+  }, [categories, parentSearchAdd]);
+  const editParentOptions = useMemo(() => {
+    const allowedRoots = roots.filter(r => r.id !== editingCategory?.id);
+    const base = [
+      ...allowedRoots.map(r => ({ id: r.id, label: `قسم: ${r.name}` })),
+      ...allowedRoots.flatMap(r =>
+        getChildren(r.id)
+          .filter(c => c.id !== editingCategory?.id)
+          .map(c => ({ id: c.id, label: `— فرع: ${c.name}` }),
+        ),
+      ),
+    ];
+    const term = parentSearchEdit.trim().toLowerCase();
+    if (!term) return base;
+    return base.filter(o => o.label.toLowerCase().includes(term));
+  }, [categories, parentSearchEdit, editingCategory?.id]);
 
   const productCountForCategory = (catName: string) =>
     products.filter(p => p.category === catName || p.classification === catName).length;
@@ -73,11 +107,13 @@ export default function InventoryCategoriesPage() {
         toast({ title: 'تم تعديل القسم' });
         setEditOpen(false);
         setEditingCategory(null);
+        setParentSearchEdit('');
       } else {
         const { error } = await supabase.from('inventory_categories').insert({ ...payload, id: crypto.randomUUID() });
         if (error) throw error;
         toast({ title: 'تم إضافة القسم' });
         setAddOpen(false);
+        setParentSearchAdd('');
       }
       setForm({ name: '', icon_key: 'default', parent_id: '', sort_order: 0 });
       fetchData();
@@ -94,6 +130,10 @@ export default function InventoryCategoriesPage() {
         description: `يوجد ${count} منتج مرتبط بهذا القسم. غيّر تصنيف المنتجات أولاً.`,
         variant: 'destructive',
       });
+      setDeleteConfirm(null);
+      return;
+    }
+    if (!promptDeletePassword()) {
       setDeleteConfirm(null);
       return;
     }
@@ -132,6 +172,9 @@ export default function InventoryCategoriesPage() {
               )}
             </div>
             <div className="flex gap-1">
+              <Button variant="outline" size="sm" className="h-7 text-xs gap-1" onClick={() => { setEditingCategory(null); setForm({ name: '', icon_key: 'default', parent_id: cat.id, sort_order: categories.length }); setAddOpen(true); }}>
+                <Plus className="h-3 w-3" /> فرع
+              </Button>
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(cat)}>
                 <Edit className="h-4 w-4" />
               </Button>
@@ -161,6 +204,9 @@ export default function InventoryCategoriesPage() {
                     )}
                   </div>
                   <div className="flex gap-1">
+                    <Button variant="outline" size="sm" className="h-6 text-[10px] gap-0.5" onClick={() => { setEditingCategory(null); setForm({ name: '', icon_key: 'default', parent_id: sub.id, sort_order: categories.length }); setAddOpen(true); }}>
+                      <Plus className="h-3 w-3" /> فرع
+                    </Button>
                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(sub)}>
                       <Edit className="h-3 w-3" />
                     </Button>
@@ -221,18 +267,28 @@ export default function InventoryCategoriesPage() {
                   <SelectItem value="ro">RO</SelectItem>
                   <SelectItem value="spare_parts">قطع غيار</SelectItem>
                   <SelectItem value="desalination">محطات تحلية</SelectItem>
+                  <SelectItem value="supplies">مستلزمات</SelectItem>
+                  <SelectItem value="tools">أدوات فنيين</SelectItem>
+                  <SelectItem value="technician">عربية / فني</SelectItem>
+                  <SelectItem value="station">محطة</SelectItem>
                   <SelectItem value="default">أخرى</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div>
-              <Label>نوع القسم</Label>
+              <Label>تحت قسم (التابعية)</Label>
+              <Input
+                value={parentSearchAdd}
+                onChange={e => setParentSearchAdd(e.target.value)}
+                placeholder="ابحث في الأقسام..."
+                className="mb-2"
+              />
               <Select value={form.parent_id || 'none'} onValueChange={v => setForm(p => ({ ...p, parent_id: v === 'none' ? '' : v }))}>
                 <SelectTrigger><SelectValue placeholder="قسم عادي" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">قسم عادي (بدون تبعية)</SelectItem>
-                  {roots.map(r => (
-                    <SelectItem key={r.id} value={r.id}>تحت قسم: {r.name}</SelectItem>
+                  {addParentOptions.map(o => (
+                    <SelectItem key={o.id} value={o.id}>{o.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -269,18 +325,28 @@ export default function InventoryCategoriesPage() {
                   <SelectItem value="ro">RO</SelectItem>
                   <SelectItem value="spare_parts">قطع غيار</SelectItem>
                   <SelectItem value="desalination">محطات تحلية</SelectItem>
+                  <SelectItem value="supplies">مستلزمات</SelectItem>
+                  <SelectItem value="tools">أدوات فنيين</SelectItem>
+                  <SelectItem value="technician">عربية / فني</SelectItem>
+                  <SelectItem value="station">محطة</SelectItem>
                   <SelectItem value="default">أخرى</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div>
-              <Label>نوع القسم</Label>
+              <Label>تحت قسم (التابعية)</Label>
+              <Input
+                value={parentSearchEdit}
+                onChange={e => setParentSearchEdit(e.target.value)}
+                placeholder="ابحث في الأقسام..."
+                className="mb-2"
+              />
               <Select value={form.parent_id || 'none'} onValueChange={v => setForm(p => ({ ...p, parent_id: v === 'none' ? '' : v }))}>
                 <SelectTrigger><SelectValue placeholder="قسم عادي" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">قسم عادي (بدون تبعية)</SelectItem>
-                  {roots.filter(r => r.id !== editingCategory?.id).map(r => (
-                    <SelectItem key={r.id} value={r.id}>تحت قسم: {r.name}</SelectItem>
+                  {editParentOptions.map(o => (
+                    <SelectItem key={o.id} value={o.id}>{o.label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
