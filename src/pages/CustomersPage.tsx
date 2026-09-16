@@ -14,6 +14,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useUserBranch } from '@/hooks/useUserBranch';
 import { branchDbValuesForUiBranch, canonicalBranchForSave } from '@/lib/branchFilters';
 import { promptDeletePassword } from '@/lib/deletePassword';
+import { matchesLooseSearch, matchesAnyLooseSearch, normalizeSearchText } from '@/lib/searchText';
 import { Badge } from '@/components/ui/badge';
 
 const BRANCH_OPTIONS = [
@@ -66,18 +67,6 @@ function stripUnknownColumnFromPayload(errorMessage: string, payload: Record<str
   if (!(unknownColumn in payload)) return false;
   delete payload[unknownColumn];
   return true;
-}
-
-function normalizeSearchText(value: string): string {
-  // Normalize Arabic/English digits to improve search by customer code.
-  const arabicIndic = '٠١٢٣٤٥٦٧٨٩';
-  const easternIndic = '۰۱۲۳۴۵۶۷۸۹';
-  return String(value || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[٠-٩]/g, (d) => String(arabicIndic.indexOf(d)))
-    .replace(/[۰-۹]/g, (d) => String(easternIndic.indexOf(d)))
-    .replace(/\s+/g, '');
 }
 
 export default function CustomersPage() {
@@ -269,8 +258,9 @@ export default function CustomersPage() {
         !searchTrim ||
         (hasExactCodeMatches && codeExact) ||
         (!hasExactCodeMatches && hasCodeMatches && codePartial) ||
-        c.name.includes(searchTrim) ||
-        c.address.includes(searchTrim) ||
+        matchesLooseSearch(c.name, searchTrim) ||
+        matchesLooseSearch(c.address, searchTrim) ||
+        matchesAnyLooseSearch([c.phone1, c.phone2, c.whatsapp], searchTrim) ||
         (c.phone1 && c.phone1.includes(searchTrim)) ||
         (c.phone2 && c.phone2.includes(searchTrim)) ||
         (c.whatsapp && c.whatsapp.includes(searchTrim)) ||

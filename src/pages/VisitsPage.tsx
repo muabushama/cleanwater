@@ -16,6 +16,7 @@ import { formatEGP, companyInfo } from '@/data/demo-data';
 import { invoiceDebtRemaining } from '@/lib/invoiceBalance';
 import { promptDeletePassword } from '@/lib/deletePassword';
 import { workOrderPhonesForPrint } from '@/lib/workOrderPrintPhones';
+import { resolveWorkOrderWarranty } from '@/lib/warrantyStatus';
 import {
   getMaintenanceIntervalMonths,
   getNextMaintenanceDate,
@@ -596,7 +597,9 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       { phone: wo.phone, customer_name: wo.customer_name },
       customers.map(c => ({ name: c.name, phone1: c.phone1, phone2: c.phone2, whatsapp: c.whatsapp })),
     );
-    const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><title>أمر عمل ${wo.order_code}</title>
+    const warrantyLabel = resolveWorkOrderWarranty(wo, devices);
+    const orderCodeLabel = wo.customer_code || wo.order_code || '-';
+    const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><title>أمر عمل ${orderCodeLabel}</title>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap');
       * { margin:0; padding:0; box-sizing:border-box; font-family:'Cairo',sans-serif; }
@@ -630,7 +633,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       </div>
       <div class="header">
         <div class="header-logo"><img src="${logo}" alt="Clean Water Logo" /></div>
-        <div class="header-info"><div class="code">رقم الأمر: ${wo.order_code || '-'}</div><div style="font-size:11px;color:#000;font-weight:600;margin-top:2px">أمر عمل</div></div>
+        <div class="header-info"><div class="code">كود العميل: ${orderCodeLabel}</div><div style="font-size:11px;color:#000;font-weight:600;margin-top:2px">أمر عمل</div></div>
       </div>
       <div class="info">
         <div class="info-item"><span class="info-label">العميل:</span><div class="info-value">${wo.customer_name || '-'}</div></div>
@@ -641,7 +644,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
         <div class="info-item"><span class="info-label">الفني:</span><div class="info-value">${wo.technician || '-'}</div></div>
         <div class="info-item"><span class="info-label">المنتج:</span><div class="info-value">${wo.product_name || '-'}</div></div>
         <div class="info-item"><span class="info-label">الحالة:</span><div class="info-value">${wo.status || '-'}</div></div>
-        <div class="info-item"><span class="info-label">حالة الضمان:</span><div class="info-value">${wo.warranty_status || '-'}</div></div>
+        <div class="info-item"><span class="info-label">حالة الضمان:</span><div class="info-value">${warrantyLabel}</div></div>
       </div>
       ${items.length > 0 ? `
         <table>

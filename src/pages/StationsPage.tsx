@@ -893,7 +893,7 @@ export default function StationsPage() {
         product_name: selectedProductNames || detailStation.name,
         visit_date: maintForm.maintenance_date || new Date().toISOString().slice(0, 10),
         technician: maintForm.technician.trim() || '',
-        warranty_status: 'ساري',
+        warranty_status: isWarrantyActive(detailStation.warranty_end) ? 'ساري' : 'منتهي',
         status: 'completed',
         branch: canonicalBranchForSave(branch),
         notes: `صيانة محطة: ${detailStation.name}${maintForm.notes.trim() ? ` - ${maintForm.notes.trim()}` : ''}`,

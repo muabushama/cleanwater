@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import { Check, ChevronsUpDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { matchesAnyLooseSearch } from '@/lib/searchText';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -27,12 +28,8 @@ export function ProductSearchCombobox({
   const inputRef = useRef<HTMLInputElement>(null);
   const selected = products.find((p) => p.id === value);
 
-  const norm = (s: string) => String(s || '').trim().toLowerCase();
   const filtered = query.trim()
-    ? products.filter((p) => {
-        const q = norm(query);
-        return norm(p.name).includes(q) || norm(String(p.sku_code || '')).includes(q) || norm(String(p.barcode || '')).includes(q);
-      })
+    ? products.filter((p) => matchesAnyLooseSearch([p.name, p.sku_code, p.barcode], query))
     : products;
 
   const pickProduct = (id: string) => {
@@ -58,7 +55,7 @@ export function ProductSearchCombobox({
           disabled={disabled}
           className="w-full justify-between font-normal h-auto min-h-9 py-1 px-2 text-right"
         >
-          <span className="truncate">
+          <span className="whitespace-normal break-words text-right leading-snug flex-1">
             {selected ? `${selected.name} (رصيد: ${selected.stock})` : placeholder}
           </span>
           <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
@@ -99,8 +96,8 @@ export function ProductSearchCombobox({
                 className="w-full flex items-center gap-2 px-3 py-2 text-sm text-right hover:bg-accent/50 border-b last:border-0"
                 onClick={() => pickProduct(p.id)}
               >
-                <Check className={cn('h-4 w-4 shrink-0', value === p.id ? 'opacity-100 text-primary' : 'opacity-0')} />
-                <span className="truncate flex-1">{p.name}</span>
+                <Check className={cn('h-4 w-4 shrink-0 mt-0.5', value === p.id ? 'opacity-100 text-primary' : 'opacity-0')} />
+                <span className="flex-1 whitespace-normal break-words text-right leading-snug">{p.name}</span>
                 <span className="text-xs text-muted-foreground shrink-0">({p.stock})</span>
               </button>
             ))

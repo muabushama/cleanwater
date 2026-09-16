@@ -77,7 +77,7 @@ export function AppSidebar({ isAdmin, isCustomerService, isWarehouseKeeper }: Ap
   const isActive = (path: string) => location.pathname === path;
 
   const adminItems = isAdmin ? [
-    { title: 'تتبع المناديب', url: '/tracking', icon: MapPin },
+    { title: 'تتبع الفنيين', url: '/tracking', icon: MapPin },
     { title: 'النسخ الاحتياطي', url: '/backup', icon: Shield },
   ] : [];
 

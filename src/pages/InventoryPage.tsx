@@ -44,6 +44,7 @@ import { ProductGrid } from '@/components/inventory/ProductGrid';
 import { ProductSearchCombobox } from '@/components/inventory/ProductSearchCombobox';
 import { ProductInventoryCards } from '@/components/inventory/ProductInventoryCards';
 import { formatDateDayMonthYear as formatDateDisplay } from '@/lib/dateDisplay';
+import { matchesAnyLooseSearch } from '@/lib/searchText';
 
 const effectiveMovementDate = (m: { created_at?: string | null; movement_date?: string | null }) =>
   String(m.movement_date || (m.created_at || '').slice(0, 10) || '');
@@ -215,16 +216,6 @@ export default function InventoryPage() {
   const [quickProduct, setQuickProduct] = useState<ProductRow | null>(null);
   const [quickStockValue, setQuickStockValue] = useState('');
   const [quickStockSaving, setQuickStockSaving] = useState(false);
-
-  const normalizeCodeSearch = (value: string) => {
-    const arabicIndic = '٠١٢٣٤٥٦٧٨٩';
-    const easternIndic = '۰۱۲۳۴۵۶۷۸۹';
-    return String(value || '')
-      .trim()
-      .toLowerCase()
-      .replace(/[٠-٩]/g, (d) => String(arabicIndic.indexOf(d)))
-      .replace(/[۰-۹]/g, (d) => String(easternIndic.indexOf(d)));
-  };
 
   const openMovement = (type: typeof movementForm.type) => {
     setMovementCategorySearch('');
@@ -409,14 +400,9 @@ export default function InventoryPage() {
     let list = categoryNamesToFilter
       ? products.filter(p => categoryNamesToFilter.includes(p.category) || categoryNamesToFilter.includes(p.classification))
       : products;
-    const term = normalizeCodeSearch(productNameSearch);
+    const term = productNameSearch.trim();
     if (term) {
-      list = list.filter((p) => {
-        const name = (p.name || '').toLowerCase();
-        const sku = normalizeCodeSearch(String(p.sku_code || ''));
-        const bc = normalizeCodeSearch(String(p.barcode || ''));
-        return name.includes(term) || sku === term || bc === term || sku.includes(term) || bc.includes(term);
-      });
+      list = list.filter((p) => matchesAnyLooseSearch([p.name, p.sku_code, p.barcode, p.category], term));
     }
     return list;
   }, [products, categoryNamesToFilter, productNameSearch]);
@@ -1229,6 +1215,23 @@ export default function InventoryPage() {
     }
   };
 
+  const handleDeleteProduct = async (product: { id: string; name: string }) => {
+    if (!confirm(`حذف المنتج "${product.name}"؟ لن يمكن التراجع.`)) return;
+    if (!promptDeletePassword()) return;
+    try {
+      await supabase.from('stock_movements').delete().eq('product_id', product.id);
+      await supabase.from('rep_inventory').delete().eq('product_id', product.id);
+      const { error } = await supabase.from('products').delete().eq('id', product.id);
+      if (error) throw error;
+      toast({ title: 'تم حذف المنتج' });
+      setAddProductOpen(false);
+      resetProductForm();
+      fetchData();
+    } catch (err: any) {
+      toast({ title: 'تعذر حذف المنتج', description: err.message, variant: 'destructive' });
+    }
+  };
+
   const handleDeleteCategory = async (cat: InventoryCategory) => {
     if (!confirm(`حذف القسم "${cat.name}"؟`)) return;
     if (!promptDeletePassword()) return;
@@ -1609,6 +1612,7 @@ export default function InventoryPage() {
                     setQuickStockOpen(true);
                   }}
                   onEditProduct={(p) => openEditProduct(p as ProductRow)}
+                  onDeleteProduct={(p) => handleDeleteProduct(p)}
                 />
               ) : (
                 <ProductGrid
@@ -1620,6 +1624,7 @@ export default function InventoryPage() {
                     setQuickStockOpen(true);
                   }}
                   onEditProduct={openEditProduct}
+                  onDeleteProduct={handleDeleteProduct}
                 />
               )}
             </>
@@ -2320,6 +2325,18 @@ export default function InventoryPage() {
               />
             </div>
             <div className="flex gap-2 justify-end">
+              {editingProductId && (
+                <Button
+                  variant="destructive"
+                  className="ml-auto"
+                  onClick={() => {
+                    const current = products.find((p) => p.id === editingProductId);
+                    if (current) handleDeleteProduct(current);
+                  }}
+                >
+                  <Trash2 className="h-4 w-4 ml-1" /> حذف المنتج
+                </Button>
+              )}
               <Button variant="outline" onClick={() => setAddProductOpen(false)}>إلغاء</Button>
               <Button onClick={editingProductId ? handleUpdateProduct : handleAddProduct} disabled={savingProduct}>
                 {savingProduct ? 'جاري الحفظ...' : editingProductId ? 'حفظ التعديلات' : 'حفظ'}

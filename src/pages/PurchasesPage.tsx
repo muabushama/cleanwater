@@ -785,7 +785,8 @@ export default function PurchasesPage() {
             </div>
             <div>
               <Label>رفع صورة / مرفق الفاتورة (اختياري)</Label>
-              <Input type="file" accept="image/*,.pdf,.heic,.heif" onChange={(e) => setInvoiceFile(e.target.files?.[0] || null)} />
+              <Input type="file" accept="image/*,.pdf,.heic,.heif" capture="environment" onChange={(e) => setInvoiceFile(e.target.files?.[0] || null)} />
+              <p className="text-[11px] text-muted-foreground mt-1">يمكن التقاط صورة للفاتورة من الكاميرا أو اختيار ملف.</p>
               {formDisplayFileUrl && (
                 <div className="mt-2 space-y-2 rounded-md border p-3 bg-muted/20">
                   <div className="flex items-center justify-between gap-2">

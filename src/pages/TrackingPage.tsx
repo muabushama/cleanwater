@@ -52,84 +52,91 @@ export default function TrackingPage() {
   const fetchData = async () => {
     setLoading(true);
 
-    // Fetch locations and orders in parallel
-    const [locResult, ordersResult] = await Promise.all([
+    const [rolesRes, locResult] = await Promise.all([
+      supabase.from('user_roles').select('user_id').eq('role', 'sales_rep'),
       supabase
         .from('rep_locations')
         .select('*, profiles:user_id(full_name)')
         .order('recorded_at', { ascending: false })
-        .limit(100),
-      supabase
-        .from('work_orders')
-        .select('id, order_code, customer_name, address, phone, product_name, total, delivery_status, location_url, region, visit_date, assigned_rep')
-        .not('assigned_rep', 'is', null)
-        .in('delivery_status', ['pending', 'accepted', 'in_transit'])
-        .order('created_at', { ascending: false }),
+        .limit(300),
     ]);
 
-    // Process locations - latest per rep
-    if (locResult.data) {
-      const latestByUser = new Map<string, any>();
-      locResult.data.forEach((loc: any) => {
-        if (!latestByUser.has(loc.user_id)) {
-          latestByUser.set(loc.user_id, { ...loc, profile: loc.profiles });
-        }
-      });
-      setLocations(Array.from(latestByUser.values()));
-    }
+    const repIds = [...new Set((rolesRes.data || []).map((r: any) => String(r.user_id || '')).filter(Boolean))];
+    const profilesRes = repIds.length
+      ? await supabase.from('profiles').select('id, full_name').in('id', repIds)
+      : { data: [] as { id: string; full_name: string }[] };
 
-    // Process orders - group by assigned_rep
-    if (ordersResult.data) {
-      const grouped: Record<string, ActiveOrder[]> = {};
-      ordersResult.data.forEach((o: any) => {
-        if (!grouped[o.assigned_rep]) grouped[o.assigned_rep] = [];
-        grouped[o.assigned_rep].push(o as ActiveOrder);
-      });
-      setOrdersByRep(grouped);
-    }
+    const ordersRes = await supabase
+      .from('work_orders')
+      .select('id, order_code, customer_name, address, phone, product_name, total, delivery_status, location_url, region, visit_date, assigned_rep, technician, status')
+      .order('created_at', { ascending: false })
+      .limit(400);
 
-    // If there are reps with orders but no GPS location yet, fetch their profiles
-    if (ordersResult.data) {
-      const repIds = [...new Set(ordersResult.data.map((o: any) => o.assigned_rep))];
-      const existingLocUserIds = new Set(locResult.data?.map((l: any) => l.user_id) || []);
-      const missingIds = repIds.filter(id => !existingLocUserIds.has(id));
-
-      if (missingIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from('profiles')
-          .select('id, full_name')
-          .in('id', missingIds);
-
-        if (profiles) {
-          setLocations(prev => {
-            const newLocs = profiles.map(p => ({
-              id: `no-loc-${p.id}`,
-              user_id: p.id,
-              latitude: 0,
-              longitude: 0,
-              accuracy: 0,
-              recorded_at: '',
-              profile: { full_name: p.full_name },
-            }));
-            return [...prev, ...newLocs];
-          });
-        }
+    const latestByUser = new Map<string, any>();
+    (locResult.data || []).forEach((loc: any) => {
+      if (!latestByUser.has(loc.user_id)) {
+        latestByUser.set(loc.user_id, { ...loc, profile: loc.profiles });
       }
-    }
+    });
 
+    const grouped: Record<string, ActiveOrder[]> = {};
+    const activeOrders = (ordersRes.data || []).filter((o: any) => {
+      const delivery = String(o.delivery_status || '');
+      const status = String(o.status || '');
+      return ['pending', 'accepted', 'in_transit'].includes(delivery)
+        || ['pending', 'in_progress'].includes(status);
+    });
+
+    const nameToId = new Map<string, string>();
+    (profilesRes.data || []).forEach((p: any) => {
+      if (p.full_name) nameToId.set(String(p.full_name).trim(), p.id);
+    });
+
+    activeOrders.forEach((o: any) => {
+      const ids = new Set<string>();
+      if (o.assigned_rep) ids.add(String(o.assigned_rep));
+      const techId = nameToId.get(String(o.technician || '').trim());
+      if (techId) ids.add(techId);
+      ids.forEach((id) => {
+        if (!grouped[id]) grouped[id] = [];
+        grouped[id].push(o as ActiveOrder);
+      });
+    });
+    setOrdersByRep(grouped);
+
+    const locations: RepLocation[] = (profilesRes.data || []).map((p: any) => {
+      const loc = latestByUser.get(p.id);
+      if (loc) {
+        return {
+          ...loc,
+          profile: loc.profile || { full_name: p.full_name },
+        };
+      }
+      return {
+        id: `no-loc-${p.id}`,
+        user_id: p.id,
+        latitude: 0,
+        longitude: 0,
+        accuracy: 0,
+        recorded_at: '',
+        profile: { full_name: p.full_name },
+      };
+    });
+
+    latestByUser.forEach((loc, userId) => {
+      if (!locations.some((l) => l.user_id === userId)) {
+        locations.push({ ...loc, profile: loc.profile });
+      }
+    });
+
+    setLocations(locations);
     setLoading(false);
   };
 
   useEffect(() => {
     fetchData();
-
-    const channel = supabase
-      .channel('tracking-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'rep_locations' }, () => fetchData())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'work_orders' }, () => fetchData())
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
+    const poll = setInterval(fetchData, 20000);
+    return () => clearInterval(poll);
   }, []);
 
   const timeSince = (dateStr: string) => {
@@ -212,8 +219,8 @@ export default function TrackingPage() {
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">تتبع المناديب</h1>
-          <p className="text-muted-foreground text-sm">مواقع المناديب والأوردرات الجارية</p>
+          <h1 className="text-2xl font-bold">تتبع الفنيين</h1>
+          <p className="text-muted-foreground text-sm">مواقع الفنيين والأوردرات الجارية — يتحدث تلقائياً كل 20 ثانية</p>
         </div>
         <Button variant="outline" size="sm" onClick={fetchData} className="gap-2">
           <RefreshCw className="h-4 w-4" /> تحديث
@@ -228,7 +235,7 @@ export default function TrackingPage() {
         <Card>
           <CardContent className="p-8 text-center">
             <MapPin className="h-12 w-12 mx-auto text-muted-foreground mb-3" />
-            <p className="text-muted-foreground">لا توجد مواقع أو أوردرات نشطة حالياً</p>
+            <p className="text-muted-foreground">لا يوجد فنيون مسجلون حالياً. أنشئ حساب فني/مندوب من صفحة الموظفين ثم افتح التطبيق من جهازه لتفعيل الموقع.</p>
           </CardContent>
         </Card>
       ) : (

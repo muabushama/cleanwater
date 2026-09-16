@@ -2102,7 +2102,7 @@ export function CustomerDetailDialog({ customer, open, onOpenChange }: CustomerD
   const openNewWorkOrderForCustomer = () => {
     if (!customer) return;
     onOpenChange(false);
-    navigate('/work-orders', { state: { newOrderForCustomer: { id: customer.id, name: activeCustomerName || customer.name, phone1: customer.phone1, phone2: customer.phone2, whatsapp: customer.whatsapp, address: customer.address, region: customer.region, area_id: customer.area_id ?? null } } });
+    navigate('/work-orders', { state: { newOrderForCustomer: { id: customer.id, name: activeCustomerName || customer.name, phone1: customer.phone1, phone2: customer.phone2, whatsapp: customer.whatsapp, address: customer.address, region: customer.region, area_id: customer.area_id ?? null, customer_code: (customer as any).customer_code || null } } });
   };
 
   const fetchAll = async (nameOverride?: string) => {

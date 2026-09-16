@@ -53,7 +53,7 @@ const TABLES = {
     select: "auth",
     insert: "admin",
     update: "auth",
-    delete: "admin",
+    delete: "auth",
   },
   customer_devices: {
     authRequired: true,
@@ -123,7 +123,7 @@ const TABLES = {
     select: "auth",
     insert: "auth",
     update: "admin",
-    delete: "admin",
+    delete: "auth",
   },
   inventory_categories: {
     authRequired: true,

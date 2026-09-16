@@ -18,6 +18,8 @@ import { branchDbValuesForUiBranch, canonicalBranchForSave } from '@/lib/branchF
 import { useLocation, useNavigate } from 'react-router-dom';
 import { formatDateDayMonthYear } from '@/lib/dateDisplay';
 import { promptDeletePassword } from '@/lib/deletePassword';
+import { matchesAnyLooseSearch } from '@/lib/searchText';
+import { computeWarrantyStatus, findCustomerDevice, resolveWorkOrderWarranty, type WarrantyDeviceHint } from '@/lib/warrantyStatus';
 
 interface WorkOrder {
   id: string;
@@ -154,10 +156,12 @@ function WorkOrderDetail({
   wo,
   onClose,
   customers,
+  devices,
 }: {
   wo: WorkOrder;
   onClose: () => void;
   customers: CustomerForSuggest[];
+  devices: WarrantyDeviceHint[];
 }) {
   const printRef = useRef<HTMLDivElement>(null);
   const computedTotal = computeWorkOrderTotal(wo);
@@ -165,6 +169,9 @@ function WorkOrderDetail({
     { phone: wo.phone, customer_name: wo.customer_name },
     customers.map((c) => ({ name: c.name, phone1: c.phone1, phone2: c.phone2, whatsapp: c.whatsapp })),
   );
+  const matchedCustomer = customers.find((c) => c.name === wo.customer_name || c.customer_code === wo.customer_code);
+  const warrantyLabel = resolveWorkOrderWarranty(wo, devices, matchedCustomer?.id);
+  const orderCodeLabel = wo.customer_code || wo.order_code || '-';
   const handlePrint = () => {
     const w = window.open('', '_blank');
     if (!w) {
@@ -192,13 +199,13 @@ function WorkOrderDetail({
           </div>
           <div class="title-wrap">
             <div class="title">أمر شغل</div>
-            <div class="code">رقم الأمر: ${escapeHtml(wo.order_code || '-')}</div>
+            <div class="code">كود العميل: ${escapeHtml(orderCodeLabel)}</div>
           </div>
         </div>
         <table class="meta"><tbody>
           <tr><td><b>اسم العميل:</b> ${escapeHtml(wo.customer_name || '-')}</td><td class="phone-cell" dir="ltr"><b>التليفون:</b> ${escapeHtml(displayPhones)}</td><td><b>التاريخ:</b> ${escapeHtml(formatDateDisplay(wo.visit_date))}</td></tr>
           <tr><td><b>العنوان:</b> ${escapeHtml(wo.address || '-')}</td><td><b>المنطقة:</b> ${escapeHtml(wo.region || '-')}</td><td><b>الفني:</b> ${escapeHtml(wo.technician || '-')}</td></tr>
-          <tr><td><b>المنتج:</b> ${escapeHtml(wo.product_name || '-')}</td><td><b>حالة الضمان:</b> ${escapeHtml(wo.warranty_status || '-')}</td><td><b>لينك الموقع:</b> ${escapeHtml(wo.location_url || '-')}</td></tr>
+          <tr><td><b>المنتج:</b> ${escapeHtml(wo.product_name || '-')}</td><td><b>حالة الضمان:</b> ${escapeHtml(warrantyLabel)}</td><td><b>لينك الموقع:</b> ${escapeHtml(wo.location_url || '-')}</td></tr>
         </tbody></table>
         <table class="items"><thead><tr><th>البيان</th><th>القيمة</th></tr></thead><tbody>
           ${tableRows}
@@ -217,7 +224,7 @@ function WorkOrderDetail({
           <p>الخط الساخن: ${escapeHtml(companyInfo.hotline)} | إدارة الفنيين: ${escapeHtml(companyInfo.techManagement)}</p>
         </div>
       </div>`;
-    w.document.write(`<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"/><title>أمر شغل ${escapeHtml(wo.order_code)}</title>
+    w.document.write(`<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"/><title>أمر شغل ${escapeHtml(orderCodeLabel)}</title>
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
         * { box-sizing: border-box; font-family: Cairo, Tahoma, sans-serif; }
@@ -271,7 +278,7 @@ function WorkOrderDetail({
         </div>
         <div className="text-center">
           <div className="border-2 border-black px-6 py-1 text-lg font-bold">أمر شغل</div>
-          <div className="text-[10px] mt-1">رقم الأمر: {wo.order_code}</div>
+          <div className="text-[10px] mt-1">كود العميل: {orderCodeLabel}</div>
         </div>
         <Button variant="ghost" size="icon" onClick={onClose} className="print:hidden shrink-0"><X className="h-4 w-4" /></Button>
       </div>
@@ -289,7 +296,7 @@ function WorkOrderDetail({
         </div>
         <div className="grid grid-cols-3 border-t border-black">
           <div className="p-1.5 border-l border-black"><span className="font-semibold">المنتج:</span> {wo.product_name || '-'}</div>
-          <div className="p-1.5 border-l border-black"><span className="font-semibold">حالة الضمان:</span> {wo.warranty_status || '-'}</div>
+          <div className="p-1.5 border-l border-black"><span className="font-semibold">حالة الضمان:</span> {warrantyLabel}</div>
           <div className="p-1.5"><span className="font-semibold">لينك الموقع:</span> {wo.location_url || '-'}</div>
         </div>
       </div>
@@ -407,9 +414,10 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
   const [searchTerm, setSearchTerm] = useState('');
   const [reps, setReps] = useState<{ id: string; full_name: string }[]>([]);
   const [areas, setAreas] = useState<{ id: string; name: string }[]>([]);
-  const [customers, setCustomers] = useState<{ id: string; name: string; phone1: string; phone2?: string; whatsapp?: string; address: string; region?: string; area_id?: string | null }[]>([]);
+  const [customers, setCustomers] = useState<CustomerForSuggest[]>([]);
+  const [customerDevices, setCustomerDevices] = useState<WarrantyDeviceHint[]>([]);
   const [products, setProducts] = useState<{ id: string; name: string; price1: number; price2: number; price3: number; stock?: number; sku_code?: string | null; barcode?: string | null }[]>([]);
-  const [initialCustomerForOrder, setInitialCustomerForOrder] = useState<{ id: string; name: string; phone1: string; phone2?: string; whatsapp?: string; address: string; region?: string; area_id?: string | null } | null>(null);
+  const [initialCustomerForOrder, setInitialCustomerForOrder] = useState<CustomerForSuggest | null>(null);
   const [assigningId, setAssigningId] = useState<string | null>(null);
   const { toast } = useToast();
   const { branch } = useUserBranch();
@@ -471,10 +479,15 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
     supabase.from('areas').select('id,name').in('branch', bv).then(({ data }) => setAreas(Array.isArray(data) ? data : []));
     supabase
       .from('customers')
-      .select('id,name,phone1,phone2,whatsapp,address,region,area_id')
+      .select('id,name,phone1,phone2,whatsapp,address,region,area_id,customer_code')
       .in('branch', bv)
       .limit(2000)
       .then(({ data }) => setCustomers(Array.isArray(data) ? data : []));
+    supabase
+      .from('customer_devices')
+      .select('customer_id,install_date,warranty_months,warranty_status,customer_code')
+      .limit(4000)
+      .then(({ data }) => setCustomerDevices(Array.isArray(data) ? (data as WarrantyDeviceHint[]) : []));
     supabase.from('products').select('id,name,price1,price2,price3,stock,sku_code,barcode').in('branch', bv).limit(2000).then(({ data }) => setProducts(Array.isArray(data) ? data : []));
   }, [branch]);
 
@@ -498,6 +511,49 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
 
   const currentOrderProductLines = (wo: WorkOrder) =>
     productLinesWithIds(extractProductLinesFromItems(wo.items));
+
+  const applyWorkOrderStock = async (
+    lines: ProductLine[],
+    direction: 'deduct' | 'restore',
+    woBranch: string,
+    orderCode: string,
+    note: string,
+  ) => {
+    for (const ln of lines) {
+      if (!ln.product_id) continue;
+      const prod = products.find((p) => p.id === ln.product_id);
+      if (!prod) continue;
+      const qty = Math.max(1, Number(ln.quantity) || 1);
+      const signedQty = direction === 'deduct' ? qty : -qty;
+      const movementPayload: Record<string, unknown> = {
+        id: crypto.randomUUID(),
+        product_id: prod.id,
+        branch: woBranch,
+        type: direction === 'deduct' ? 'sale' : 'adjustment',
+        quantity: direction === 'deduct' ? qty : qty,
+        reference_type: 'work_order',
+        reference_id: orderCode || null,
+        notes: note,
+      };
+      await supabase.from('stock_movements').insert(movementPayload as any);
+      const nextStock = Math.max(0, (Number((prod as any).stock) || 0) - signedQty);
+      await supabase.from('products').update({ stock: nextStock } as any).eq('id', prod.id);
+      (prod as any).stock = nextStock;
+    }
+  };
+
+  const resolveWarrantyForValues = (values: Record<string, string>) => {
+    const customer = customers.find((c) => c.name === values.customer_name || c.customer_code === values.order_code);
+    const device = findCustomerDevice(customerDevices, {
+      id: customer?.id,
+      name: values.customer_name,
+      customer_code: customer?.customer_code || values.order_code,
+    });
+    if (device) return computeWarrantyStatus(device);
+    const stored = String(values.warranty_status || '').trim();
+    if (stored === 'ساري' || stored === 'منتهي') return stored;
+    return 'منتهي';
+  };
 
   const assignRep = async (orderId: string, repId: string) => {
     setAssigningId(orderId);
@@ -529,8 +585,12 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
         typeof phone2 === 'string' ? phone2 : undefined,
         typeof phone3 === 'string' ? phone3 : undefined,
       );
-      const { error } = await supabase.from('work_orders').insert({
-        order_code: values.order_code,
+      const warrantyStatus = resolveWarrantyForValues(values);
+      const customerMatch = customers.find((c) => c.name === values.customer_name || c.customer_code === values.order_code);
+      const customerCode = String(customerMatch?.customer_code || values.order_code || '').trim();
+      const payload: Record<string, unknown> = {
+        order_code: customerCode || values.order_code,
+        customer_code: customerCode || null,
         customer_name: values.customer_name,
         phone: phoneJoined,
         address: values.address,
@@ -540,7 +600,7 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
         product_name: firstLine?.product_name || values.product_name || '',
         visit_date: values.visit_date,
         technician: values.technician || '',
-        warranty_status: values.warranty_status || 'ساري',
+        warranty_status: warrantyStatus,
         status: values.status || 'pending',
         branch: woBranch,
         notes: values.notes || '',
@@ -554,34 +614,22 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
         price1: 0,
         price2: 0,
         price3: 0,
-      } as any);
+      };
+      let { error } = await supabase.from('work_orders').insert(payload as any);
+      if (error && /customer_code/i.test(error.message || '')) {
+        delete payload.customer_code;
+        ({ error } = await supabase.from('work_orders').insert(payload as any));
+      }
       if (error) throw error;
 
-      // خصم المخزون تلقائياً من خطوط المنتجات داخل أمر الشغل
-      for (const ln of productLines) {
-        if (!ln.product_id) continue;
-        const prod = products.find((p) => p.id === ln.product_id);
-        if (!prod) continue;
-        const qty = Math.max(1, Number(ln.quantity) || 1);
-        const movementPayload: Record<string, unknown> = {
-          id: crypto.randomUUID(),
-          product_id: prod.id,
-          branch: woBranch,
-          type: 'sale',
-          quantity: qty,
-          reference_type: 'work_order',
-          reference_id: values.order_code || null,
-          notes: `أمر شغل ${values.order_code || ''} - ${values.customer_name || ''}`.trim(),
-        };
-        let movErr: any;
-        ({ error: movErr } = await supabase.from('stock_movements').insert(movementPayload as any));
-        if (movErr && /storage_location|Unknown column/i.test(String(movErr.message || ''))) {
-          // لا نعطل العملية إذا عمود الموقع غير موجود في بعض البيئات
-          ({ error: movErr } = await supabase.from('stock_movements').insert(movementPayload as any));
-        }
-        if (movErr) throw movErr;
-        const nextStock = Math.max(0, (Number((prod as any).stock) || 0) - qty);
-        await supabase.from('products').update({ stock: nextStock } as any).eq('id', prod.id);
+      if ((values.status || 'pending') === 'completed') {
+        await applyWorkOrderStock(
+          productLines,
+          'deduct',
+          woBranch,
+          customerCode || values.order_code,
+          `أمر شغل مكتمل ${customerCode || values.order_code || ''} - ${values.customer_name || ''}`.trim(),
+        );
       }
 
       const maintenanceDatesRaw = (values.maintenance_dates || '').trim();
@@ -647,8 +695,13 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
         typeof phone2 === 'string' ? phone2 : undefined,
         typeof phone3 === 'string' ? phone3 : undefined,
       );
+      const warrantyStatus = resolveWarrantyForValues(values);
+      const customerMatch = customers.find((c) => c.name === values.customer_name || c.customer_code === values.order_code);
+      const customerCode = String(customerMatch?.customer_code || values.order_code || editingWO.customer_code || '').trim();
+      const nextStatus = values.status || 'pending';
       const { error } = await supabase.from('work_orders').update({
-        order_code: values.order_code,
+        order_code: customerCode || values.order_code,
+        customer_code: customerCode || null,
         customer_name: values.customer_name,
         phone: phoneJoined,
         address: values.address,
@@ -658,8 +711,8 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
         product_name: firstLine?.product_name || values.product_name || '',
         visit_date: values.visit_date,
         technician: values.technician || '',
-        warranty_status: values.warranty_status || 'ساري',
-        status: values.status || 'pending',
+        warranty_status: warrantyStatus,
+        status: nextStatus,
         branch: canonicalBranchForSave(values.branch || branch),
         notes: values.notes || '',
         price1: firstLine?.unit_price ?? (Number((editingWO as any).price1) || 0),
@@ -672,35 +725,17 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
       } as any).eq('id', editingWO.id);
       if (error) throw error;
 
-      if (productsChanged) {
-        const oldLines = fallbackLines
-          .map((ln) => ({ product_id: ln.product_id || '', quantity: Math.max(1, Number(ln.quantity) || 1) }))
-          .filter((x) => x.product_id);
-        const qtyMap = new Map<string, number>();
-        oldLines.forEach((ln) => qtyMap.set(ln.product_id, (qtyMap.get(ln.product_id) || 0) - ln.quantity));
-        productLines
-          .filter((ln) => ln.product_id)
-          .forEach((ln) => qtyMap.set(ln.product_id, (qtyMap.get(ln.product_id) || 0) + Math.max(1, Number(ln.quantity) || 1)));
-
-        for (const [productId, deltaSold] of qtyMap.entries()) {
-          if (deltaSold === 0) continue;
-          const prod = products.find((p) => p.id === productId);
-          if (!prod) continue;
-          const current = Number((prod as any).stock) || 0;
-          const nextStock = Math.max(0, current - deltaSold);
-          const movementPayload: Record<string, unknown> = {
-            id: crypto.randomUUID(),
-            product_id: productId,
-            branch: canonicalBranchForSave(values.branch || branch),
-            type: 'adjustment',
-            quantity: -deltaSold,
-            reference_type: 'work_order_edit',
-            reference_id: values.order_code || editingWO.order_code || null,
-            notes: `تعديل أمر شغل ${values.order_code || editingWO.order_code || ''}`.trim(),
-          };
-          await supabase.from('stock_movements').insert(movementPayload as any);
-          await supabase.from('products').update({ stock: nextStock } as any).eq('id', productId);
-        }
+      const wasCompleted = editingWO.status === 'completed';
+      const nowCompleted = nextStatus === 'completed';
+      const woBranch = canonicalBranchForSave(values.branch || branch);
+      const codeRef = customerCode || values.order_code || editingWO.order_code || '';
+      if (!wasCompleted && nowCompleted) {
+        await applyWorkOrderStock(productLines, 'deduct', woBranch, codeRef, `اكتمال أمر شغل ${codeRef}`);
+      } else if (wasCompleted && !nowCompleted) {
+        await applyWorkOrderStock(fallbackLines, 'restore', woBranch, codeRef, `إلغاء اكتمال أمر شغل ${codeRef}`);
+      } else if (wasCompleted && nowCompleted && productsChanged) {
+        await applyWorkOrderStock(fallbackLines, 'restore', woBranch, codeRef, `تعديل أمر شغل ${codeRef}`);
+        await applyWorkOrderStock(productLines, 'deduct', woBranch, codeRef, `تعديل أمر شغل ${codeRef}`);
       }
 
       toast({ title: 'تم تعديل أمر العمل بنجاح' });
@@ -736,6 +771,15 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
     if (!confirm(`حذف أمر العمل "${wo.order_code || wo.customer_name}"؟`)) return;
     if (!promptDeletePassword()) return;
     try {
+      if (wo.status === 'completed') {
+        await applyWorkOrderStock(
+          currentOrderProductLines(wo),
+          'restore',
+          canonicalBranchForSave(wo.branch || branch),
+          wo.order_code || '',
+          `حذف أمر شغل مكتمل ${wo.order_code || ''}`,
+        );
+      }
       const { error } = await supabase.from('work_orders').delete().eq('id', wo.id);
       if (error) throw error;
       toast({ title: 'تم حذف أمر العمل' });
@@ -751,7 +795,7 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
     const extractedLines = currentOrderProductLines(editingWO);
     const phones = splitWorkOrderPhoneFields(editingWO.phone || '');
     return {
-      order_code: editingWO.order_code || '',
+      order_code: editingWO.customer_code || editingWO.order_code || '',
       customer_name: editingWO.customer_name || '',
       phone: phones.phone,
       phone2: phones.phone2,
@@ -771,21 +815,12 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
       assigned_rep: editingWO.assigned_rep || 'none',
       visit_date: editingWO.visit_date || '',
       technician: editingWO.technician || '',
-      warranty_status: editingWO.warranty_status || 'ساري',
+      warranty_status: resolveWorkOrderWarranty(editingWO, customerDevices),
       status: editingWO.status || 'pending',
       branch: editingWO.branch || branch,
       notes: editingWO.notes || '',
     };
-  }, [editingWO, branch]);
-
-  const getNextOrderCode = () => {
-    let maxNum = 0;
-    workOrders.forEach(wo => {
-      const num = parseInt(String(wo.order_code || '').replace(/\D/g, ''), 10);
-      if (Number.isFinite(num) && num > maxNum) maxNum = num;
-    });
-    return String(maxNum + 1);
-  };
+  }, [editingWO, branch, customerDevices]);
 
   const getRepName = (repId?: string) => {
     if (!repId) return null;
@@ -796,22 +831,14 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
     if (embedded && strictEmptyEmbedded) return [];
     const f = (customerNameFilter || '').trim();
     const base = f ? workOrders.filter((w) => (w.customer_name || '').trim() === f) : workOrders;
-    const q = searchTerm.trim().toLowerCase();
+    const q = searchTerm.trim();
     if (!q) return base;
-    const digits = q.replace(/\D/g, '');
-    return base.filter((w) => {
-      const haystack = [
-        w.order_code,
-        w.customer_code,
-        String(w.customer_id_num || ''),
-        w.customer_name,
-        w.phone,
-        w.region,
-        w.product_name,
-      ].join(' ').toLowerCase();
-      const phoneDigits = String(w.phone || '').replace(/\D/g, '');
-      return haystack.includes(q) || (digits.length > 0 && phoneDigits.includes(digits));
-    });
+    return base.filter((w) =>
+      matchesAnyLooseSearch(
+        [w.order_code, w.customer_code, w.customer_id_num, w.customer_name, w.phone, w.region, w.product_name],
+        q,
+      ),
+    );
   }, [workOrders, customerNameFilter, embedded, strictEmptyEmbedded, searchTerm]);
 
   const openAddDialog = () => {
@@ -865,16 +892,19 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                     <div className="space-y-2 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="font-bold">{wo.order_code}</h3>
+                        <h3 className="font-bold">{wo.customer_code || wo.order_code}</h3>
                         <Badge variant={statusVariant(wo.status)}>{statusLabel(wo.status)}</Badge>
                         {wo.order_code?.startsWith('صيانة-') && (
                           <Badge variant="secondary" className="text-[10px]">صيانة</Badge>
                         )}
-                        {wo.warranty_status && (
-                          <Badge variant={wo.warranty_status === 'ساري' ? 'default' : 'destructive'} className="text-[10px]">
-                            ضمان: {wo.warranty_status}
-                          </Badge>
-                        )}
+                        {(() => {
+                          const wStatus = resolveWorkOrderWarranty(wo, customerDevices);
+                          return (
+                            <Badge variant={wStatus === 'ساري' ? 'default' : 'destructive'} className="text-[10px]">
+                              ضمان: {wStatus}
+                            </Badge>
+                          );
+                        })()}
                         {wo.assigned_rep && (
                           <Badge variant="outline" className="text-[10px] gap-1">
                             <Truck className="h-3 w-3" />
@@ -941,7 +971,7 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
                   </Button>
                 </div>
               )}
-              <WorkOrderDetail wo={selectedWO} onClose={() => setSelectedWO(null)} customers={customers} />
+              <WorkOrderDetail wo={selectedWO} onClose={() => setSelectedWO(null)} customers={customers} devices={customerDevices} />
             </div>
           )}
         </DialogContent>
@@ -955,8 +985,8 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
         areas={areas}
         customers={customers}
         products={products}
+        customerDevices={customerDevices}
         initialCustomer={initialCustomerForOrder}
-        nextOrderCode={getNextOrderCode()}
         onSubmit={handleAdd}
         loading={saving}
       />
@@ -968,6 +998,7 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
         areas={areas}
         customers={customers}
         products={products}
+        customerDevices={customerDevices}
         initialValues={editInitialValues}
         title="تعديل أمر العمل"
         submitLabel="تعديل"

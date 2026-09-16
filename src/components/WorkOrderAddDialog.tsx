@@ -7,6 +7,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { joinWorkOrderPhoneFields } from '@/lib/workOrderPrintPhones';
 import { ProductSearchCombobox } from '@/components/inventory/ProductSearchCombobox';
+import { matchesLooseSearch, matchesAnyLooseSearch } from '@/lib/searchText';
+import { computeWarrantyStatus, findCustomerDevice, type WarrantyDeviceHint } from '@/lib/warrantyStatus';
 
 export interface CustomerForSuggest {
   id: string;
@@ -17,6 +19,7 @@ export interface CustomerForSuggest {
   address: string;
   region?: string;
   area_id?: string | null;
+  customer_code?: string | null;
 }
 
 export interface ProductForSuggest {
@@ -38,6 +41,7 @@ interface WorkOrderAddDialogProps {
   areas: { id: string; name: string }[];
   customers: CustomerForSuggest[];
   products: ProductForSuggest[];
+  customerDevices?: WarrantyDeviceHint[];
   initialCustomer?: CustomerForSuggest | null;
   nextOrderCode?: string;
   initialValues?: Record<string, string>;
@@ -65,7 +69,7 @@ const defaultForm: Record<string, string> = {
   visit_date: '',
   maintenance_dates: '',
   technician: '',
-  warranty_status: 'ساري',
+  warranty_status: '',
   status: 'pending',
   branch: 'فرع الإسكندرية',
   notes: '',
@@ -79,6 +83,7 @@ export function WorkOrderAddDialog({
   areas,
   customers,
   products,
+  customerDevices = [],
   initialCustomer,
   nextOrderCode,
   initialValues,
@@ -94,22 +99,39 @@ export function WorkOrderAddDialog({
   ]);
   const customerInputRef = useRef<HTMLInputElement>(null);
 
-  const customerSearch = (form.customer_name || '').trim().toLowerCase();
-  const suggestedCustomers = customerSearch.length < 2 ? [] : customers.filter(
-    c => c.name.toLowerCase().includes(customerSearch)
-  ).slice(0, 8);
+  const customerSearch = (form.customer_name || '').trim();
+  const suggestedCustomers = customerSearch.length < 1 ? [] : customers.filter(
+    (c) => matchesAnyLooseSearch([c.name, c.phone1, c.phone2, c.whatsapp, c.customer_code, c.address, c.region], customerSearch),
+  ).slice(0, 12);
+
+  const areaNameById = (areaId?: string | null) => {
+    if (!areaId || areaId === 'none') return '';
+    return areas.find((a) => a.id === areaId)?.name || '';
+  };
+
+  const applyCustomerFields = (c: CustomerForSuggest, prev: Record<string, string> = form) => {
+    const device = findCustomerDevice(customerDevices, { id: c.id, name: c.name, customer_code: c.customer_code || '' });
+    const region = (c.region || '').trim() || areaNameById(c.area_id);
+    return {
+      ...prev,
+      customer_name: c.name,
+      phone: String(c.phone1 || '').trim(),
+      phone2: String(c.phone2 || '').trim(),
+      phone3: String(c.whatsapp || '').trim(),
+      address: c.address || '',
+      region,
+      area_id: (c.area_id && c.area_id !== '') ? c.area_id : 'none',
+      order_code: String(c.customer_code || '').trim(),
+      warranty_status: computeWarrantyStatus(device),
+    };
+  };
   useEffect(() => {
     if (open) {
       const base = { ...defaultForm, branch };
-      if (nextOrderCode) base.order_code = nextOrderCode;
       if (initialCustomer) {
-        base.customer_name = initialCustomer.name;
-        base.phone = String(initialCustomer.phone1 || '').trim();
-        base.phone2 = String(initialCustomer.phone2 || '').trim();
-        base.phone3 = String(initialCustomer.whatsapp || '').trim();
-        base.address = initialCustomer.address || '';
-        base.region = initialCustomer.region || '';
-        base.area_id = (initialCustomer.area_id && initialCustomer.area_id !== '') ? initialCustomer.area_id : 'none';
+        Object.assign(base, applyCustomerFields(initialCustomer, base));
+      } else if (nextOrderCode) {
+        base.order_code = nextOrderCode;
       }
       const merged = { ...base, phone2: base.phone2 || '', phone3: base.phone3 || '', ...(initialValues || {}) };
       setForm(merged);
@@ -144,7 +166,7 @@ export function WorkOrderAddDialog({
         setProductLines([{ product_id: '', product_name: fallbackName, quantity: '1', unit_price: fallbackPrice }]);
       }
     }
-  }, [open, branch, initialCustomer, nextOrderCode, initialValues]);
+  }, [open, branch, initialCustomer, nextOrderCode, initialValues, customerDevices, products, areas]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -178,16 +200,7 @@ export function WorkOrderAddDialog({
   };
 
   const selectCustomer = (c: CustomerForSuggest) => {
-    setForm(prev => ({
-      ...prev,
-      customer_name: c.name,
-      phone: String(c.phone1 || '').trim(),
-      phone2: String(c.phone2 || '').trim(),
-      phone3: String(c.whatsapp || '').trim(),
-      address: c.address || '',
-      region: c.region || '',
-      area_id: (c.area_id && c.area_id !== '') ? c.area_id : 'none',
-    }));
+    setForm((prev) => applyCustomerFields(c, prev));
     setCustomerDropdown(false);
   };
 
@@ -199,8 +212,14 @@ export function WorkOrderAddDialog({
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1.5">
-            <Label>كود الأمر</Label>
-            <Input value={form.order_code} onChange={e => setForm(p => ({ ...p, order_code: e.target.value }))} required />
+            <Label>كود العميل</Label>
+            <Input
+              value={form.order_code}
+              readOnly
+              className="bg-muted/50"
+              placeholder="يُملأ تلقائياً من كود العميل عند اختيار الاسم"
+            />
+            <p className="text-[11px] text-muted-foreground">رقم الأمر في الطباعة هو كود العميل، ويُعبَّأ تلقائياً عند اختيار العميل.</p>
           </div>
 
           {/* اقتراح العميل */}
@@ -211,8 +230,14 @@ export function WorkOrderAddDialog({
               value={form.customer_name}
               onChange={e => { setForm(p => ({ ...p, customer_name: e.target.value })); setCustomerDropdown(true); }}
               onFocus={() => suggestedCustomers.length > 0 && setCustomerDropdown(true)}
-              onBlur={() => setTimeout(() => setCustomerDropdown(false), 180)}
-              placeholder="ابحث أو اكتب اسم عميل جديد"
+              onBlur={() => setTimeout(() => {
+                setCustomerDropdown(false);
+                const typed = (form.customer_name || '').trim();
+                if (!typed) return;
+                const matches = customers.filter((c) => matchesLooseSearch(c.name, typed) || c.name.trim() === typed);
+                if (matches.length === 1) selectCustomer(matches[0]);
+              }, 180)}
+              placeholder="ابحث بأي جزء من الاسم أو الهاتف أو الكود (المسافات غير مطلوبة)"
             />
             {customerDropdown && suggestedCustomers.length > 0 && (
               <ul className="absolute z-50 w-full mt-0.5 border bg-popover rounded-md shadow-lg max-h-48 overflow-auto">
@@ -220,9 +245,9 @@ export function WorkOrderAddDialog({
                   <li key={c.id}>
                     <button type="button" className="w-full text-right px-3 py-2 hover:bg-muted text-sm" onClick={() => selectCustomer(c)}>
                       <span className="font-medium">{c.name}</span>
+                      {c.customer_code && <span className="text-muted-foreground"> — كود {c.customer_code}</span>}
                       {c.phone1 && <span className="text-muted-foreground"> — {c.phone1}</span>}
-                      {c.phone2 && <span className="text-muted-foreground"> — {c.phone2}</span>}
-                      {c.whatsapp && <span className="text-muted-foreground"> — واتساب: {c.whatsapp}</span>}
+                      {c.region && <span className="text-muted-foreground"> — {c.region}</span>}
                     </button>
                   </li>
                 ))}
@@ -238,8 +263,8 @@ export function WorkOrderAddDialog({
                 <Input value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} required dir="ltr" className="text-left" />
               </div>
               <div className="space-y-1.5">
-                <Label>المنطقة (نص حر)</Label>
-                <Input value={form.region} onChange={e => setForm(p => ({ ...p, region: e.target.value }))} />
+                <Label>المنطقة</Label>
+                <Input value={form.region} onChange={e => setForm(p => ({ ...p, region: e.target.value }))} placeholder="تُملأ تلقائياً من بيانات العميل" />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -262,7 +287,16 @@ export function WorkOrderAddDialog({
           {areas.length > 0 && (
             <div className="space-y-1.5">
               <Label>المنطقة (من القائمة)</Label>
-              <Select value={form.area_id || 'none'} onValueChange={v => setForm(p => ({ ...p, area_id: v }))}>
+              <Select
+                value={form.area_id || 'none'}
+                onValueChange={(v) =>
+                  setForm((p) => ({
+                    ...p,
+                    area_id: v,
+                    region: v !== 'none' ? (areas.find((a) => a.id === v)?.name || p.region) : p.region,
+                  }))
+                }
+              >
                 <SelectTrigger><SelectValue placeholder="بدون" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">بدون</SelectItem>
@@ -372,7 +406,17 @@ export function WorkOrderAddDialog({
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1.5">
               <Label>المندوب المسؤول</Label>
-              <Select value={form.assigned_rep || 'none'} onValueChange={v => setForm(p => ({ ...p, assigned_rep: v }))}>
+              <Select
+                value={form.assigned_rep || 'none'}
+                onValueChange={(v) => {
+                  const name = reps.find((r) => r.id === v)?.full_name || '';
+                  setForm((p) => ({
+                    ...p,
+                    assigned_rep: v,
+                    technician: p.technician || (v !== 'none' ? name : p.technician),
+                  }));
+                }}
+              >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">بدون مندوب</SelectItem>
@@ -398,8 +442,8 @@ export function WorkOrderAddDialog({
             </div>
             <div className="space-y-1.5">
               <Label>الضمان</Label>
-              <Select value={form.warranty_status} onValueChange={v => setForm(p => ({ ...p, warranty_status: v }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+              <Select value={form.warranty_status || 'منتهي'} onValueChange={v => setForm(p => ({ ...p, warranty_status: v }))}>
+                <SelectTrigger><SelectValue placeholder="يُحسب من تاريخ التركيب" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="ساري">ساري</SelectItem>
                   <SelectItem value="منتهي">منتهي</SelectItem>

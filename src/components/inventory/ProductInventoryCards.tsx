@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { formatEGP } from '@/data/demo-data';
 import { normalizeStorageLocation, STORAGE_SHOWROOM } from '@/lib/storageLocation';
-import { Edit, Package } from 'lucide-react';
+import { Edit, Package, Trash2 } from 'lucide-react';
 
 export interface InventoryProductCardModel {
   id: string;
@@ -26,6 +26,7 @@ interface ProductInventoryCardsProps {
   onProductClick?: (product: InventoryProductCardModel) => void;
   /** تعديل بيانات المنتج كاملة (اسم، أسعار، صورة...) */
   onEditProduct?: (product: InventoryProductCardModel) => void;
+  onDeleteProduct?: (product: InventoryProductCardModel) => void;
   className?: string;
 }
 
@@ -34,6 +35,7 @@ export function ProductInventoryCards({
   loading = false,
   onProductClick,
   onEditProduct,
+  onDeleteProduct,
   className = '',
 }: ProductInventoryCardsProps) {
   if (loading) {
@@ -69,7 +71,7 @@ export function ProductInventoryCards({
               </div>
               <div className="p-4 space-y-2">
                 <div className="flex items-start justify-between gap-2">
-                  <h3 className="font-bold text-sm leading-snug line-clamp-2">{p.name}</h3>
+                  <h3 className="font-bold text-sm leading-snug whitespace-normal break-words">{p.name}</h3>
                   <div className="flex flex-col items-end gap-1 shrink-0">
                     <Badge variant={low ? 'destructive' : 'secondary'} className="text-[10px]">
                       {low ? 'منخفض' : 'متوفر'}
@@ -91,18 +93,32 @@ export function ProductInventoryCards({
                     <p className="text-xs font-semibold">{formatEGP(p.cost)}</p>
                   </div>
                 </div>
-                {onEditProduct && (
-                  <div className="pt-2" onClick={(e) => e.stopPropagation()}>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="w-full h-8 gap-1 text-xs"
-                      onClick={() => onEditProduct(p)}
-                    >
-                      <Edit className="h-3.5 w-3.5" />
-                      تعديل بيانات المنتج
-                    </Button>
+                {(onEditProduct || onDeleteProduct) && (
+                  <div className="pt-2 flex gap-2" onClick={(e) => e.stopPropagation()}>
+                    {onEditProduct && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="flex-1 h-8 gap-1 text-xs"
+                        onClick={() => onEditProduct(p)}
+                      >
+                        <Edit className="h-3.5 w-3.5" />
+                        تعديل
+                      </Button>
+                    )}
+                    {onDeleteProduct && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1 text-xs text-destructive border-destructive/30"
+                        onClick={() => onDeleteProduct(p)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        حذف
+                      </Button>
+                    )}
                   </div>
                 )}
               </div>

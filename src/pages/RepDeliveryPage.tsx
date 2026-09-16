@@ -12,13 +12,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import logo from '@/assets/logo.png';
-import { invoiceCustomerCredit, invoiceDebtRemaining } from '@/lib/invoiceBalance';
+import { ProductSearchCombobox } from '@/components/inventory/ProductSearchCombobox';
+import { matchesLooseSearch } from '@/lib/searchText';
+import {
+  canonicalPurchaseFileUrl,
+  isPurchaseImageFile,
+} from '@/lib/purchaseFileUrl';
 
 const formatDateDisplay = (v: any) => { const s = String(v || ''); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : s; };
 import { branchDbValuesForUiBranch } from '@/lib/branchFilters';
 import {
   Package, MapPin, Phone, Check, X, Truck, Navigation, Clock, History,
-  ShoppingCart, Plus, Printer, FileText, Search, RotateCcw,
+  ShoppingCart, Plus, Printer, FileText, Search, RotateCcw, Camera,
 } from 'lucide-react';
 
 type DeliveryStatus = 'pending' | 'accepted' | 'in_transit' | 'delivered' | 'rejected';
@@ -112,6 +117,7 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
   const [saving, setSaving] = useState(false);
   const [returnSaving, setReturnSaving] = useState(false);
   const [purchaseSaving, setPurchaseSaving] = useState(false);
+  const [purchaseInvoiceFile, setPurchaseInvoiceFile] = useState<File | null>(null);
   const [productSearch, setProductSearch] = useState('');
 
   const fetchAll = async () => {
@@ -317,6 +323,14 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
     try {
       const purchaseNumber = `PUR-REP-${Date.now().toString().slice(-6)}`;
       const id = crypto.randomUUID();
+      let invoice_file_url: string | null = null;
+      if (purchaseInvoiceFile) {
+        const ext = purchaseInvoiceFile.name.split('.').pop() || 'jpg';
+        const path = `purchase-invoices/${crypto.randomUUID()}.${ext}`;
+        const uploadRes = await supabase.storage.from('documents').upload(path, purchaseInvoiceFile);
+        if (uploadRes.error) throw uploadRes.error;
+        invoice_file_url = canonicalPurchaseFileUrl(uploadRes.data);
+      }
       await supabase.from('purchases').insert({
         id,
         purchase_number: purchaseNumber,
@@ -330,6 +344,7 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
         branch: branchName,
         rep_name: profile?.full_name || '',
         notes: purchaseForm.notes.trim() || null,
+        invoice_file_url,
       });
       await supabase.from('stock_movements').insert({
         id: crypto.randomUUID(),
@@ -348,6 +363,7 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
       toast({ title: `تم تسجيل المشتريات ✅ ${purchaseNumber}` });
       setShowPurchaseDialog(false);
       setPurchaseForm({ supplier_name: '', product_id: '', product_name: '', quantity: 1, unit_price: 0, total: 0, notes: '' });
+      setPurchaseInvoiceFile(null);
       fetchAll();
     } catch (err: any) {
       toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
@@ -441,7 +457,7 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
   const activeOrders = orders.filter(o => o.delivery_status === 'accepted' || o.delivery_status === 'in_transit');
 
   const filteredProducts = productSearch
-    ? products.filter(p => p.name.includes(productSearch) || p.category.includes(productSearch)).slice(0, 10)
+    ? products.filter((p) => matchesLooseSearch(`${p.name} ${p.category}`, productSearch)).slice(0, 12)
     : [];
 
   if (loading) {
@@ -796,13 +812,23 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
             </div>
             <div>
               <Label className="text-xs">المنتج *</Label>
-              <Select value={purchaseForm.product_id || 'none'} onValueChange={v => { if (v === 'none') { setPurchaseForm(p => ({ ...p, product_id: '', product_name: '' })); return; } const prod = products.find(x => x.id === v); const u = Number((prod as any)?.cost) || 0; const q = purchaseForm.quantity || 1; setPurchaseForm(p => ({ ...p, product_id: v, product_name: prod?.name || '', unit_price: u, total: u * q })); }}>
-                <SelectTrigger className="h-8"><SelectValue placeholder="اختر المنتج" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">— اختر منتج —</SelectItem>
-                  {products.map(p => (<SelectItem key={p.id} value={p.id}>{p.name} (رصيد: {p.stock})</SelectItem>))}
-                </SelectContent>
-              </Select>
+              <ProductSearchCombobox
+                products={products.map((p) => ({ id: p.id, name: p.name, stock: Number(p.stock) || 0 }))}
+                value={purchaseForm.product_id}
+                onValueChange={(id) => {
+                  const prod = products.find((x) => x.id === id);
+                  const u = Number((prod as any)?.cost) || Number(prod?.price) || 0;
+                  const q = purchaseForm.quantity || 1;
+                  setPurchaseForm((p) => ({
+                    ...p,
+                    product_id: id,
+                    product_name: prod?.name || '',
+                    unit_price: u,
+                    total: u * q,
+                  }));
+                }}
+                placeholder="ابحث باسم المنتج أو جزء منه"
+              />
             </div>
             <div className="grid grid-cols-3 gap-2">
               <div>
@@ -817,6 +843,22 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
                 <Label className="text-xs">الإجمالي</Label>
                 <Input type="number" min={0} value={purchaseForm.total} readOnly className="h-8 bg-muted/50" dir="ltr" />
               </div>
+            </div>
+            <div>
+              <Label className="text-xs">صورة الفاتورة</Label>
+              <Input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="h-9 text-xs"
+                onChange={(e) => setPurchaseInvoiceFile(e.target.files?.[0] || null)}
+              />
+              <p className="text-[11px] text-muted-foreground mt-1 flex items-center gap-1">
+                <Camera className="h-3 w-3" /> التقاط صورة من الكاميرا أو اختيار ملف من الجهاز
+              </p>
+              {purchaseInvoiceFile && (
+                <p className="text-[11px] text-primary mt-1">تم اختيار: {purchaseInvoiceFile.name}</p>
+              )}
             </div>
             <div>
               <Label className="text-xs">ملاحظات</Label>

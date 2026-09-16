@@ -37,7 +37,7 @@ $tableRules = [
     'profiles' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'admin', 'update' => 'auth', 'delete' => 'admin'],
     'user_roles' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'admin', 'update' => 'admin', 'delete' => 'admin'],
     'customers' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
-    'products' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'admin', 'update' => 'auth', 'delete' => 'admin'],
+    'products' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'admin', 'update' => 'auth', 'delete' => 'auth'],
     'customer_devices' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
     'candle_changes' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
     'installments' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
@@ -48,7 +48,7 @@ $tableRules = [
     'system_settings' => ['authRequired' => true, 'select' => 'admin', 'insert' => 'admin', 'update' => 'admin', 'delete' => 'admin'],
     // جداول إضافية مستخدمة في التطبيق ويجب السماح بها أيضاً
     'areas' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
-    'stock_movements' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'admin', 'delete' => 'admin'],
+    'stock_movements' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'admin', 'delete' => 'auth'],
     'inventory_categories' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'admin', 'update' => 'admin', 'delete' => 'admin'],
     'expenses' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
     'purchases' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
