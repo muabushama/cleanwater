@@ -49,93 +49,94 @@ export default function TrackingPage() {
   const [liveLocation, setLiveLocation] = useState<{ lat: number; lng: number; time: string } | null>(null);
   const trackingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchData = async () => {
-    setLoading(true);
+  const fetchData = async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
+    try {
+      const [rolesRes, locResult] = await Promise.all([
+        supabase.from('user_roles').select('user_id, role').in('role', ['sales_rep', 'staff']),
+        supabase
+          .from('rep_locations')
+          .select('*')
+          .order('recorded_at', { ascending: false })
+          .limit(400),
+      ]);
 
-    const [rolesRes, locResult] = await Promise.all([
-      supabase.from('user_roles').select('user_id').eq('role', 'sales_rep'),
-      supabase
-        .from('rep_locations')
-        .select('*, profiles:user_id(full_name)')
-        .order('recorded_at', { ascending: false })
-        .limit(300),
-    ]);
+      const locRows = Array.isArray(locResult.data) ? locResult.data : [];
+      const roleRows = Array.isArray(rolesRes.data) ? rolesRes.data : [];
 
-    const repIds = [...new Set((rolesRes.data || []).map((r: any) => String(r.user_id || '')).filter(Boolean))];
-    const profilesRes = repIds.length
-      ? await supabase.from('profiles').select('id, full_name').in('id', repIds)
-      : { data: [] as { id: string; full_name: string }[] };
-
-    const ordersRes = await supabase
-      .from('work_orders')
-      .select('id, order_code, customer_name, address, phone, product_name, total, delivery_status, location_url, region, visit_date, assigned_rep, technician, status')
-      .order('created_at', { ascending: false })
-      .limit(400);
-
-    const latestByUser = new Map<string, any>();
-    (locResult.data || []).forEach((loc: any) => {
-      if (!latestByUser.has(loc.user_id)) {
-        latestByUser.set(loc.user_id, { ...loc, profile: loc.profiles });
-      }
-    });
-
-    const grouped: Record<string, ActiveOrder[]> = {};
-    const activeOrders = (ordersRes.data || []).filter((o: any) => {
-      const delivery = String(o.delivery_status || '');
-      const status = String(o.status || '');
-      return ['pending', 'accepted', 'in_transit'].includes(delivery)
-        || ['pending', 'in_progress'].includes(status);
-    });
-
-    const nameToId = new Map<string, string>();
-    (profilesRes.data || []).forEach((p: any) => {
-      if (p.full_name) nameToId.set(String(p.full_name).trim(), p.id);
-    });
-
-    activeOrders.forEach((o: any) => {
-      const ids = new Set<string>();
-      if (o.assigned_rep) ids.add(String(o.assigned_rep));
-      const techId = nameToId.get(String(o.technician || '').trim());
-      if (techId) ids.add(techId);
-      ids.forEach((id) => {
-        if (!grouped[id]) grouped[id] = [];
-        grouped[id].push(o as ActiveOrder);
+      const latestByUser = new Map<string, any>();
+      locRows.forEach((loc: any) => {
+        const uid = String(loc.user_id || '');
+        if (uid && !latestByUser.has(uid)) latestByUser.set(uid, loc);
       });
-    });
-    setOrdersByRep(grouped);
 
-    const locations: RepLocation[] = (profilesRes.data || []).map((p: any) => {
-      const loc = latestByUser.get(p.id);
-      if (loc) {
+      const allIds = [...new Set([
+        ...roleRows.map((r: any) => String(r.user_id || '')),
+        ...latestByUser.keys(),
+      ].filter(Boolean))];
+
+      const profilesRes = allIds.length
+        ? await supabase.from('profiles').select('id, full_name').in('id', allIds)
+        : { data: [] as { id: string; full_name: string }[] };
+
+      const profileMap = new Map<string, string>();
+      (profilesRes.data || []).forEach((p: any) => {
+        if (p?.id) profileMap.set(String(p.id), String(p.full_name || 'مندوب'));
+      });
+
+      const ordersRes = await supabase
+        .from('work_orders')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(400);
+
+      const grouped: Record<string, ActiveOrder[]> = {};
+      const nameToId = new Map<string, string>();
+      profileMap.forEach((name, id) => {
+        if (name) nameToId.set(name.trim(), id);
+      });
+
+      (ordersRes.data || []).forEach((o: any) => {
+        const delivery = String(o.delivery_status || '');
+        const status = String(o.status || '');
+        const active = ['pending', 'accepted', 'in_transit'].includes(delivery)
+          || ['pending', 'in_progress'].includes(status);
+        if (!active) return;
+        const ids = new Set<string>();
+        if (o.assigned_rep) ids.add(String(o.assigned_rep));
+        const techId = nameToId.get(String(o.technician || '').trim());
+        if (techId) ids.add(techId);
+        ids.forEach((id) => {
+          if (!grouped[id]) grouped[id] = [];
+          grouped[id].push(o as ActiveOrder);
+        });
+      });
+      setOrdersByRep(grouped);
+
+      const locations: RepLocation[] = allIds.map((id) => {
+        const loc = latestByUser.get(id);
         return {
-          ...loc,
-          profile: loc.profile || { full_name: p.full_name },
+          id: loc?.id || `no-loc-${id}`,
+          user_id: id,
+          latitude: Number(loc?.latitude) || 0,
+          longitude: Number(loc?.longitude) || 0,
+          accuracy: Number(loc?.accuracy) || 0,
+          recorded_at: loc?.recorded_at || '',
+          profile: { full_name: profileMap.get(id) || 'مندوب' },
         };
-      }
-      return {
-        id: `no-loc-${p.id}`,
-        user_id: p.id,
-        latitude: 0,
-        longitude: 0,
-        accuracy: 0,
-        recorded_at: '',
-        profile: { full_name: p.full_name },
-      };
-    });
+      });
 
-    latestByUser.forEach((loc, userId) => {
-      if (!locations.some((l) => l.user_id === userId)) {
-        locations.push({ ...loc, profile: loc.profile });
-      }
-    });
-
-    setLocations(locations);
-    setLoading(false);
+      setLocations(locations);
+    } catch (err) {
+      console.error('tracking fetch failed', err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
     fetchData();
-    const poll = setInterval(fetchData, 20000);
+    const poll = setInterval(() => fetchData({ silent: true }), 20000);
     return () => clearInterval(poll);
   }, []);
 
@@ -181,7 +182,7 @@ export default function TrackingPage() {
       .eq('user_id', repId)
       .order('recorded_at', { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
     if (data) {
       setLiveLocation({ lat: data.latitude, lng: data.longitude, time: data.recorded_at });
       // Also update the location in the main list

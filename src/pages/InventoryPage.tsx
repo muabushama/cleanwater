@@ -282,6 +282,7 @@ export default function InventoryPage() {
       const id = String(p.id || '').trim();
       const name = String(p.name || '').trim();
       if (!id || !name) return false;
+      if (name.startsWith('[محذوف]')) return false;
       if (seenProductIds.has(id)) return false;
       seenProductIds.add(id);
       return true;
@@ -1217,11 +1218,24 @@ export default function InventoryPage() {
 
   const handleDeleteProduct = async (product: { id: string; name: string }) => {
     if (!confirm(`حذف المنتج "${product.name}"؟ لن يمكن التراجع.`)) return;
-    if (!promptDeletePassword()) return;
     try {
-      await supabase.from('stock_movements').delete().eq('product_id', product.id);
-      await supabase.from('rep_inventory').delete().eq('product_id', product.id);
-      const { error } = await supabase.from('products').delete().eq('id', product.id);
+      await Promise.allSettled([
+        supabase.from('stock_movements').delete().eq('product_id', product.id),
+        supabase.from('rep_inventory').delete().eq('product_id', product.id),
+        supabase.from('rep_inventory_transfers').delete().eq('product_id', product.id),
+        supabase.from('invoice_lines').update({ product_id: null } as any).eq('product_id', product.id),
+        supabase.from('purchases').update({ product_id: null } as any).eq('product_id', product.id),
+        supabase.from('returns').update({ product_id: null } as any).eq('product_id', product.id),
+        supabase.from('invoices').update({ product_id: null } as any).eq('product_id', product.id),
+      ]);
+      let { error } = await supabase.from('products').delete().eq('id', product.id);
+      if (error) {
+        ({ error } = await supabase.from('products').update({
+          name: `[محذوف] ${product.name}`.slice(0, 180),
+          stock: 0,
+          min_stock: 0,
+        } as any).eq('id', product.id));
+      }
       if (error) throw error;
       toast({ title: 'تم حذف المنتج' });
       setAddProductOpen(false);

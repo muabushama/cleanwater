@@ -1,8 +1,12 @@
 import { useEffect, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 
+function mysqlDateTime(date = new Date()) {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 export function useGpsTracking(userId: string | undefined, enabled: boolean) {
-  const watchIdRef = useRef<number | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval>>();
 
   useEffect(() => {
@@ -13,10 +17,12 @@ export function useGpsTracking(userId: string | undefined, enabled: boolean) {
       supabase
         .from('rep_locations')
         .insert({
+          id: crypto.randomUUID(),
           user_id: userId,
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
+          latitude: Number(position.coords.latitude) || 0,
+          longitude: Number(position.coords.longitude) || 0,
+          accuracy: Number(position.coords.accuracy) || 0,
+          recorded_at: mysqlDateTime(),
         })
         .then(({ error }) => {
           if (error) console.error('GPS tracking error:', error);
@@ -32,11 +38,6 @@ export function useGpsTracking(userId: string | undefined, enabled: boolean) {
     };
 
     requestOnce();
-    watchIdRef.current = navigator.geolocation.watchPosition(
-      sendLocation,
-      (err) => console.error('Geolocation watch error:', err),
-      { enableHighAccuracy: true, timeout: 20000, maximumAge: 15000 },
-    );
     intervalRef.current = setInterval(requestOnce, 60 * 1000);
 
     const onVisible = () => {
@@ -46,7 +47,6 @@ export function useGpsTracking(userId: string | undefined, enabled: boolean) {
 
     return () => {
       document.removeEventListener('visibilitychange', onVisible);
-      if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current);
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [userId, enabled]);

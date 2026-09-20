@@ -12,11 +12,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import logo from '@/assets/logo.png';
-import { ProductSearchCombobox } from '@/components/inventory/ProductSearchCombobox';
 import { matchesLooseSearch } from '@/lib/searchText';
+import { invoiceCustomerCredit, invoiceDebtRemaining } from '@/lib/invoiceBalance';
 import {
   canonicalPurchaseFileUrl,
   isPurchaseImageFile,
+  resolvePurchaseFileUrl,
 } from '@/lib/purchaseFileUrl';
 
 const formatDateDisplay = (v: any) => { const s = String(v || ''); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : s; };
@@ -102,7 +103,7 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
   const [showPurchaseDialog, setShowPurchaseDialog] = useState(false);
   const [viewInvoice, setViewInvoice] = useState<SaleInvoice | null>(null);
   const [myReturns, setMyReturns] = useState<{ id: string; return_number: string; customer_name: string; product_name: string; quantity: number; amount: number; return_date: string }[]>([]);
-  const [myPurchases, setMyPurchases] = useState<{ id: string; purchase_number: string; supplier_name: string; product_name: string; quantity: number; total: number; purchase_date: string }[]>([]);
+  const [myPurchases, setMyPurchases] = useState<{ id: string; purchase_number: string; supplier_name: string; product_name: string; quantity: number; total: number; purchase_date: string; invoice_file_url?: string | null }[]>([]);
   const { toast } = useToast();
 
   // Sale form
@@ -118,7 +119,11 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
   const [returnSaving, setReturnSaving] = useState(false);
   const [purchaseSaving, setPurchaseSaving] = useState(false);
   const [purchaseInvoiceFile, setPurchaseInvoiceFile] = useState<File | null>(null);
+  const [purchaseInvoicePreview, setPurchaseInvoicePreview] = useState<string | null>(null);
   const [productSearch, setProductSearch] = useState('');
+  const [purchaseProductSearch, setPurchaseProductSearch] = useState('');
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchAll = async () => {
     const [activeRes, historyRes, profileRes] = await Promise.all([
@@ -132,8 +137,13 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
 
     const repBranch = profileBranchName(profileRes.data as { branch_id?: string } | null);
 
-    const prodRes = await supabase.from('products').select('*').in('branch', branchDbValuesForUiBranch(repBranch)).order('name');
-    if (prodRes.data) setProducts(prodRes.data as any as Product[]);
+    let prodRes = await supabase.from('products').select('*').in('branch', branchDbValuesForUiBranch(repBranch)).order('name');
+    if (!prodRes.data?.length) {
+      prodRes = await supabase.from('products').select('*').order('name');
+    }
+    if (prodRes.data) {
+      setProducts((prodRes.data as any as Product[]).filter((p) => !String(p.name || '').startsWith('[محذوف]')));
+    }
 
     // Fetch my invoices, returns, purchases
     const repName = profileRes.data?.full_name || '';
@@ -149,7 +159,7 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
           .limit(50),
         supabase
           .from('purchases')
-          .select('id, purchase_number, supplier_name, product_name, quantity, total, purchase_date')
+          .select('id, purchase_number, supplier_name, product_name, quantity, total, purchase_date, invoice_file_url')
           .eq('rep_name', repName)
           .in('branch', branchDbValuesForUiBranch(repBranch))
           .order('purchase_date', { ascending: false })
@@ -311,6 +321,12 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
     }
   };
 
+  const applyPurchaseInvoiceFile = (file: File | null) => {
+    if (purchaseInvoicePreview) URL.revokeObjectURL(purchaseInvoicePreview);
+    setPurchaseInvoiceFile(file);
+    setPurchaseInvoicePreview(file && isPurchaseImageFile(file) ? URL.createObjectURL(file) : null);
+  };
+
   const handleCreatePurchase = async () => {
     if (!purchaseForm.supplier_name.trim() || !purchaseForm.product_id) {
       toast({ title: 'خطأ', description: 'اسم المورد والمنتج مطلوبان', variant: 'destructive' });
@@ -326,12 +342,15 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
       let invoice_file_url: string | null = null;
       if (purchaseInvoiceFile) {
         const ext = purchaseInvoiceFile.name.split('.').pop() || 'jpg';
-        const path = `purchase-invoices/${crypto.randomUUID()}.${ext}`;
+        const path = `${crypto.randomUUID()}.${ext}`;
         const uploadRes = await supabase.storage.from('documents').upload(path, purchaseInvoiceFile);
-        if (uploadRes.error) throw uploadRes.error;
-        invoice_file_url = canonicalPurchaseFileUrl(uploadRes.data);
+        if (uploadRes.error) {
+          toast({ title: 'تم حفظ المشتريات بدون الصورة', description: uploadRes.error.message, variant: 'destructive' });
+        } else {
+          invoice_file_url = canonicalPurchaseFileUrl(uploadRes.data);
+        }
       }
-      await supabase.from('purchases').insert({
+      const payload: Record<string, unknown> = {
         id,
         purchase_number: purchaseNumber,
         supplier_name: purchaseForm.supplier_name.trim(),
@@ -340,12 +359,30 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
         quantity: qty,
         unit_price: purchaseForm.unit_price || 0,
         total,
+        paid: 0,
+        remaining: total,
+        items: [{
+          product_id: purchaseForm.product_id,
+          product_name: product?.name || purchaseForm.product_name || 'منتج',
+          quantity: qty,
+          unit_price: purchaseForm.unit_price || 0,
+          line_total: total,
+        }],
         purchase_date: new Date().toISOString().split('T')[0],
         branch: branchName,
         rep_name: profile?.full_name || '',
         notes: purchaseForm.notes.trim() || null,
         invoice_file_url,
-      });
+      };
+      let insertRes = await supabase.from('purchases').insert(payload);
+      if (insertRes.error) {
+        delete payload.invoice_file_url;
+        delete payload.items;
+        delete payload.paid;
+        delete payload.remaining;
+        insertRes = await supabase.from('purchases').insert(payload);
+      }
+      if (insertRes.error) throw insertRes.error;
       await supabase.from('stock_movements').insert({
         id: crypto.randomUUID(),
         product_id: purchaseForm.product_id,
@@ -363,7 +400,8 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
       toast({ title: `تم تسجيل المشتريات ✅ ${purchaseNumber}` });
       setShowPurchaseDialog(false);
       setPurchaseForm({ supplier_name: '', product_id: '', product_name: '', quantity: 1, unit_price: 0, total: 0, notes: '' });
-      setPurchaseInvoiceFile(null);
+      applyPurchaseInvoiceFile(null);
+      setPurchaseProductSearch('');
       fetchAll();
     } catch (err: any) {
       toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
@@ -459,6 +497,9 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
   const filteredProducts = productSearch
     ? products.filter((p) => matchesLooseSearch(`${p.name} ${p.category}`, productSearch)).slice(0, 12)
     : [];
+  const filteredPurchaseProducts = purchaseProductSearch.trim()
+    ? products.filter((p) => matchesLooseSearch(`${p.name} ${p.category}`, purchaseProductSearch)).slice(0, 20)
+    : products.slice(0, 20);
 
   if (loading) {
     return (
@@ -609,10 +650,19 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
           ) : (
             myPurchases.map(p => (
               <Card key={p.id} className="card-shadow">
-                <CardContent className="p-4">
-                  <p className="font-bold text-sm">{p.purchase_number}</p>
-                  <p className="text-sm">{p.supplier_name} – {p.product_name}</p>
-                  <p className="text-xs text-muted-foreground">{formatDateDisplay(p.purchase_date)} | الكمية: {p.quantity} | {formatEGP(p.total)}</p>
+                <CardContent className="p-4 flex gap-3">
+                  {p.invoice_file_url && (
+                    <img
+                      src={resolvePurchaseFileUrl(p.invoice_file_url) || ''}
+                      alt="فاتورة"
+                      className="w-14 h-14 rounded-md object-cover border shrink-0"
+                    />
+                  )}
+                  <div className="min-w-0">
+                    <p className="font-bold text-sm">{p.purchase_number}</p>
+                    <p className="text-sm">{p.supplier_name} – {p.product_name}</p>
+                    <p className="text-xs text-muted-foreground">{formatDateDisplay(p.purchase_date)} | الكمية: {p.quantity} | {formatEGP(p.total)}</p>
+                  </div>
                 </CardContent>
               </Card>
             ))
@@ -802,33 +852,68 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
       </Dialog>
 
       {/* Purchase Dialog */}
-      <Dialog open={showPurchaseDialog} onOpenChange={setShowPurchaseDialog}>
-        <DialogContent className="max-w-md">
+      <Dialog open={showPurchaseDialog} onOpenChange={(open) => {
+        setShowPurchaseDialog(open);
+        if (!open) {
+          setPurchaseProductSearch('');
+          applyPurchaseInvoiceFile(null);
+        }
+      }}>
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader><DialogTitle>تسجيل مشتريات</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div>
               <Label className="text-xs">اسم المورد *</Label>
               <Input value={purchaseForm.supplier_name} onChange={e => setPurchaseForm(p => ({ ...p, supplier_name: e.target.value }))} placeholder="اسم المورد" className="h-8" />
             </div>
-            <div>
+            <div className="relative">
               <Label className="text-xs">المنتج *</Label>
-              <ProductSearchCombobox
-                products={products.map((p) => ({ id: p.id, name: p.name, stock: Number(p.stock) || 0 }))}
-                value={purchaseForm.product_id}
-                onValueChange={(id) => {
-                  const prod = products.find((x) => x.id === id);
-                  const u = Number((prod as any)?.cost) || Number(prod?.price) || 0;
-                  const q = purchaseForm.quantity || 1;
-                  setPurchaseForm((p) => ({
-                    ...p,
-                    product_id: id,
-                    product_name: prod?.name || '',
-                    unit_price: u,
-                    total: u * q,
-                  }));
-                }}
-                placeholder="ابحث باسم المنتج أو جزء منه"
-              />
+              <div className="relative">
+                <Search className="absolute right-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  value={purchaseForm.product_id ? purchaseForm.product_name : purchaseProductSearch}
+                  onChange={(e) => {
+                    setPurchaseProductSearch(e.target.value);
+                    setPurchaseForm((p) => ({ ...p, product_id: '', product_name: '' }));
+                  }}
+                  className="h-8 text-sm pr-8"
+                  placeholder="ابحث واختر المنتج..."
+                />
+              </div>
+              {!purchaseForm.product_id && (
+                <div className="mt-1 bg-popover border rounded-md shadow-lg z-50 max-h-48 overflow-y-auto">
+                  {filteredPurchaseProducts.length === 0 ? (
+                    <p className="p-2 text-xs text-muted-foreground text-center">
+                      {products.length === 0 ? 'لا توجد منتجات محمّلة. حدّث الصفحة.' : 'لا يوجد منتج مطابق'}
+                    </p>
+                  ) : (
+                    filteredPurchaseProducts.map((p) => (
+                      <button
+                        key={p.id}
+                        type="button"
+                        className="w-full text-right p-2 hover:bg-accent/50 text-xs border-b last:border-0"
+                        onClick={() => {
+                          const u = Number((p as any).cost) || Number(p.price) || 0;
+                          const q = purchaseForm.quantity || 1;
+                          setPurchaseForm((prev) => ({
+                            ...prev,
+                            product_id: p.id,
+                            product_name: p.name,
+                            unit_price: u,
+                            total: u * q,
+                          }));
+                          setPurchaseProductSearch(p.name);
+                        }}
+                      >
+                        <div className="flex justify-between items-center gap-2">
+                          <span className="font-medium whitespace-normal break-words">{p.name}</span>
+                          <Badge variant={p.stock > 0 ? 'outline' : 'destructive'} className="text-[9px] shrink-0">{p.stock}</Badge>
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-3 gap-2">
               <div>
@@ -846,16 +931,32 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
             </div>
             <div>
               <Label className="text-xs">صورة الفاتورة</Label>
-              <Input
+              <input
+                ref={cameraInputRef}
                 type="file"
                 accept="image/*"
                 capture="environment"
-                className="h-9 text-xs"
-                onChange={(e) => setPurchaseInvoiceFile(e.target.files?.[0] || null)}
+                className="hidden"
+                onChange={(e) => applyPurchaseInvoiceFile(e.target.files?.[0] || null)}
               />
-              <p className="text-[11px] text-muted-foreground mt-1 flex items-center gap-1">
-                <Camera className="h-3 w-3" /> التقاط صورة من الكاميرا أو اختيار ملف من الجهاز
-              </p>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => applyPurchaseInvoiceFile(e.target.files?.[0] || null)}
+              />
+              <div className="flex gap-2 mt-1">
+                <Button type="button" variant="outline" size="sm" className="gap-1 h-8 text-xs" onClick={() => cameraInputRef.current?.click()}>
+                  <Camera className="h-3.5 w-3.5" /> التقاط صورة
+                </Button>
+                <Button type="button" variant="secondary" size="sm" className="h-8 text-xs" onClick={() => fileInputRef.current?.click()}>
+                  اختيار ملف
+                </Button>
+              </div>
+              {purchaseInvoicePreview && (
+                <img src={purchaseInvoicePreview} alt="معاينة الفاتورة" className="mt-2 h-28 w-full object-cover rounded-md border" />
+              )}
               {purchaseInvoiceFile && (
                 <p className="text-[11px] text-primary mt-1">تم اختيار: {purchaseInvoiceFile.name}</p>
               )}

@@ -221,14 +221,14 @@ const TABLES = {
     select: "auth",
     insert: "auth",
     update: "auth",
-    delete: "admin",
+    delete: "auth",
   },
   rep_inventory_transfers: {
     authRequired: true,
     select: "auth",
     insert: "auth",
     update: "auth",
-    delete: "admin",
+    delete: "auth",
   },
 };
 

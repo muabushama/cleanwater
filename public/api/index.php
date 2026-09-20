@@ -62,8 +62,8 @@ $tableRules = [
     'station_maintenance' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
     'station_contract_installments' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
     'candle_types' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
-    'rep_inventory' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
-    'rep_inventory_transfers' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'admin'],
+    'rep_inventory' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'auth'],
+    'rep_inventory_transfers' => ['authRequired' => true, 'select' => 'auth', 'insert' => 'auth', 'update' => 'auth', 'delete' => 'auth'],
 ];
 
 $deleteAllOrder = [
@@ -677,6 +677,21 @@ function normalizeInsertRow(string $table, array $row, ?array $user, array $defa
         }
     }
 
+    if ($table === 'rep_locations') {
+        if (!isset($row['recorded_at']) || $row['recorded_at'] === '') {
+            $row['recorded_at'] = date('Y-m-d H:i:s');
+        } else {
+            $ts = strtotime((string)$row['recorded_at']);
+            $row['recorded_at'] = $ts ? date('Y-m-d H:i:s', $ts) : date('Y-m-d H:i:s');
+        }
+        $row['accuracy'] = (float)($row['accuracy'] ?? 0);
+        $row['latitude'] = (float)($row['latitude'] ?? 0);
+        $row['longitude'] = (float)($row['longitude'] ?? 0);
+        if ($user !== null && (empty($row['user_id']) || $row['user_id'] === '')) {
+            $row['user_id'] = $user['id'];
+        }
+    }
+
     return $row;
 }
 
@@ -1217,9 +1232,38 @@ try {
                 sendJson(400, ['data' => null, 'error' => ['message' => 'Delete requires filters']]);
             }
 
-            $stmt = $pdo->prepare('DELETE FROM `' . $table . '`' . $where['sql']);
-            $stmt->execute($where['params']);
-            sendJson(200, ['data' => [], 'error' => null]);
+            try {
+                if ($table === 'products') {
+                    $idStmt = $pdo->prepare('SELECT id FROM `products`' . $where['sql']);
+                    $idStmt->execute($where['params']);
+                    $productIds = array_values(array_filter(array_map(static fn(array $r): string => (string)($r['id'] ?? ''), $idStmt->fetchAll())));
+                    foreach ($productIds as $productId) {
+                        foreach ([
+                            'DELETE FROM stock_movements WHERE product_id = ?',
+                            'DELETE FROM rep_inventory WHERE product_id = ?',
+                            'DELETE FROM rep_inventory_transfers WHERE product_id = ?',
+                            'DELETE FROM product_warehouse_stock WHERE product_id = ?',
+                            'UPDATE invoice_lines SET product_id = NULL WHERE product_id = ?',
+                            'UPDATE purchases SET product_id = NULL WHERE product_id = ?',
+                            'UPDATE returns SET product_id = NULL WHERE product_id = ?',
+                            'UPDATE invoices SET product_id = NULL WHERE product_id = ?',
+                        ] as $cleanupSql) {
+                            try {
+                                $cleanupStmt = $pdo->prepare($cleanupSql);
+                                $cleanupStmt->execute([$productId]);
+                            } catch (Throwable $cleanupError) {
+                                // الجدول أو العمود قد لا يكون موجوداً في بعض قواعد البيانات
+                            }
+                        }
+                    }
+                }
+
+                $stmt = $pdo->prepare('DELETE FROM `' . $table . '`' . $where['sql']);
+                $stmt->execute($where['params']);
+                sendJson(200, ['data' => [], 'error' => null]);
+            } catch (Throwable $e) {
+                sendJson(400, ['data' => null, 'error' => ['message' => $e->getMessage()]]);
+            }
         }
 
         sendJson(404, ['data' => null, 'error' => ['message' => 'Action not supported']]);
