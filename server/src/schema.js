@@ -51,7 +51,7 @@ const TABLES = {
   products: {
     authRequired: true,
     select: "auth",
-    insert: "admin",
+    insert: "auth",
     update: "auth",
     delete: "auth",
   },

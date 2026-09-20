@@ -9,6 +9,10 @@ import { joinWorkOrderPhoneFields } from '@/lib/workOrderPrintPhones';
 import { ProductSearchCombobox } from '@/components/inventory/ProductSearchCombobox';
 import { matchesLooseSearch, matchesAnyLooseSearch } from '@/lib/searchText';
 import { computeWarrantyStatus, findCustomerDevice, type WarrantyDeviceHint } from '@/lib/warrantyStatus';
+import { supabase } from '@/integrations/supabase/client';
+import { useToast } from '@/hooks/use-toast';
+import { canonicalBranchForSave } from '@/lib/branchFilters';
+import { normalizeStorageLocation, STORAGE_LOCATION_OPTIONS, STORAGE_MAIN } from '@/lib/storageLocation';
 
 export interface CustomerForSuggest {
   id: string;
@@ -25,6 +29,7 @@ export interface CustomerForSuggest {
 export interface ProductForSuggest {
   id: string;
   name: string;
+  price?: number;
   price1: number;
   price2: number;
   price3: number;
@@ -32,6 +37,60 @@ export interface ProductForSuggest {
   sku_code?: string | null;
   barcode?: string | null;
 }
+
+type NewProductDraft = {
+  name: string;
+  sku: string;
+  barcode: string;
+  unit: string;
+  min_stock: string;
+  supplier: string;
+  description: string;
+  category: string;
+  cost: string;
+  priceRetail: string;
+  priceWholesale: string;
+  storage_location: string;
+  stock: string;
+  warranty: string;
+};
+
+type ProductLineRow = {
+  product_id: string;
+  product_name: string;
+  quantity: string;
+  unit_price: string;
+  mode: 'existing' | 'new';
+  draft: NewProductDraft;
+  image?: File | null;
+};
+
+const emptyNewProduct = (): NewProductDraft => ({
+  name: '',
+  sku: '',
+  barcode: '',
+  unit: 'قطعة',
+  min_stock: '5',
+  supplier: '',
+  description: '',
+  category: 'غير مصنف',
+  cost: '',
+  priceRetail: '',
+  priceWholesale: '',
+  storage_location: STORAGE_MAIN,
+  stock: '0',
+  warranty: '12',
+});
+
+const emptyLine = (): ProductLineRow => ({
+  product_id: '',
+  product_name: '',
+  quantity: '1',
+  unit_price: '0',
+  mode: 'existing',
+  draft: emptyNewProduct(),
+  image: null,
+});
 
 interface WorkOrderAddDialogProps {
   open: boolean;
@@ -48,6 +107,7 @@ interface WorkOrderAddDialogProps {
   title?: string;
   submitLabel?: string;
   onSubmit: (values: Record<string, string>) => Promise<void>;
+  onProductCreated?: (product: ProductForSuggest) => void;
   loading?: boolean;
 }
 
@@ -90,14 +150,18 @@ export function WorkOrderAddDialog({
   title,
   submitLabel,
   onSubmit,
+  onProductCreated,
   loading,
 }: WorkOrderAddDialogProps) {
+  const { toast } = useToast();
   const [form, setForm] = useState<Record<string, string>>({ ...defaultForm, branch });
   const [customerDropdown, setCustomerDropdown] = useState(false);
-  const [productLines, setProductLines] = useState<Array<{ product_id: string; product_name: string; quantity: string; unit_price: string }>>([
-    { product_id: '', product_name: '', quantity: '1', unit_price: '0' },
-  ]);
+  const [productLines, setProductLines] = useState<ProductLineRow[]>([emptyLine()]);
+  const [categoryNames, setCategoryNames] = useState<string[]>(['غير مصنف']);
+  const [savingNewProductIdx, setSavingNewProductIdx] = useState<number | null>(null);
+  const [extraProducts, setExtraProducts] = useState<ProductForSuggest[]>([]);
   const customerInputRef = useRef<HTMLInputElement>(null);
+  const allProducts = [...extraProducts, ...products];
 
   const customerSearch = (form.customer_name || '').trim();
   const suggestedCustomers = customerSearch.length < 1 ? [] : customers.filter(
@@ -127,6 +191,7 @@ export function WorkOrderAddDialog({
   };
   useEffect(() => {
     if (open) {
+      setExtraProducts([]);
       const base = { ...defaultForm, branch };
       if (initialCustomer) {
         Object.assign(base, applyCustomerFields(initialCustomer, base));
@@ -140,49 +205,159 @@ export function WorkOrderAddDialog({
         if (Array.isArray(parsed) && parsed.length > 0) {
           setProductLines(parsed.map((x: any) => {
             const productName = String(x.product_name || '').trim();
-            const matched = products.find((p) => p.id === x.product_id)
-              || products.find((p) => String(p.name || '').trim() === productName);
+            const matched = allProducts.find((p) => p.id === x.product_id)
+              || allProducts.find((p) => String(p.name || '').trim() === productName);
             return {
+              ...emptyLine(),
               product_id: String(x.product_id || matched?.id || ''),
               product_name: productName || matched?.name || '',
               quantity: String(x.quantity ?? '1'),
               unit_price: String(x.unit_price ?? '0'),
+              mode: 'existing' as const,
             };
           }));
         } else {
           const fallbackPrice = String((merged as any).price1 || '0');
           const fallbackName = String(merged.product_name || '').trim();
-          const matched = products.find((p) => String(p.name || '').trim() === fallbackName);
+          const matched = allProducts.find((p) => String(p.name || '').trim() === fallbackName);
           setProductLines([{
+            ...emptyLine(),
             product_id: matched?.id || '',
             product_name: fallbackName || matched?.name || '',
-            quantity: '1',
             unit_price: fallbackPrice,
           }]);
         }
       } catch {
         const fallbackPrice = String((merged as any).price1 || '0');
         const fallbackName = String(merged.product_name || '').trim();
-        setProductLines([{ product_id: '', product_name: fallbackName, quantity: '1', unit_price: fallbackPrice }]);
+        setProductLines([{ ...emptyLine(), product_name: fallbackName, unit_price: fallbackPrice }]);
       }
+      supabase.from('inventory_categories').select('name').order('sort_order').then(({ data }) => {
+        const names = Array.from(new Set(['غير مصنف', ...(Array.isArray(data) ? data.map((c: any) => String(c.name || '').trim()).filter(Boolean) : [])]));
+        setCategoryNames(names);
+      });
     }
-  }, [open, branch, initialCustomer, nextOrderCode, initialValues, customerDevices, products, areas]);
+  }, [open, branch, initialCustomer, nextOrderCode, initialValues, customerDevices, areas]);
+
+  const saveNewProduct = async (ln: ProductLineRow): Promise<ProductForSuggest> => {
+    const draft = ln.draft;
+    if (!draft.name.trim()) throw new Error('اسم المنتج الجديد مطلوب');
+    if (!draft.priceRetail.trim()) throw new Error('سعر القطاعي للمنتج الجديد مطلوب');
+
+    let imageUrl: string | null = null;
+    if (ln.image) {
+      const ext = ln.image.name.split('.').pop() || 'jpg';
+      const filePath = `${crypto.randomUUID()}.${ext}`;
+      const { error: uploadError } = await supabase.storage.from('product-images').upload(filePath, ln.image);
+      if (uploadError) throw uploadError;
+      const { data: urlData } = supabase.storage.from('product-images').getPublicUrl(filePath);
+      imageUrl = urlData.publicUrl;
+    }
+
+    const insertPayload: Record<string, unknown> = {
+      id: crypto.randomUUID(),
+      name: draft.name.trim(),
+      branch: canonicalBranchForSave(form.branch || branch),
+      category: draft.category.trim() || 'غير مصنف',
+      classification: 'عام',
+      cost: Number(draft.cost) || 0,
+      price: Number(draft.priceRetail) || 0,
+      price1: Number(draft.priceWholesale) || Number(draft.priceRetail) || 0,
+      price2: 0,
+      price3: 0,
+      discount: 0,
+      warranty: Math.max(0, Math.floor(Number(draft.warranty) || 12)),
+      stock: Math.max(0, Math.floor(Number(draft.stock) || 0)),
+      min_stock: Math.max(0, Math.floor(Number(draft.min_stock) || 0)),
+      image: imageUrl,
+      storage_location: normalizeStorageLocation(draft.storage_location),
+    };
+    if (draft.sku.trim()) insertPayload.sku_code = draft.sku.trim();
+    if (draft.barcode.trim()) insertPayload.barcode = draft.barcode.trim();
+    if (draft.unit.trim()) insertPayload.unit = draft.unit.trim();
+    if (draft.supplier.trim()) insertPayload.supplier_name = draft.supplier.trim();
+    if (draft.description.trim()) insertPayload.description = draft.description.trim();
+
+    let { error } = await supabase.from('products').insert(insertPayload as any);
+    if (error && /storage_location|Unknown column|warranty/i.test(error.message || '')) {
+      delete insertPayload.storage_location;
+      if (/Unknown column 'warranty'/i.test(error.message || '')) delete insertPayload.warranty;
+      ({ error } = await supabase.from('products').insert(insertPayload as any));
+    }
+    if (error) throw error;
+
+    const created: ProductForSuggest = {
+      id: String(insertPayload.id),
+      name: String(insertPayload.name),
+      price: Number(insertPayload.price) || 0,
+      price1: Number(insertPayload.price1) || 0,
+      price2: 0,
+      price3: 0,
+      stock: Number(insertPayload.stock) || 0,
+      sku_code: (insertPayload.sku_code as string) || null,
+      barcode: (insertPayload.barcode as string) || null,
+    };
+    setExtraProducts((prev) => [created, ...prev.filter((p) => p.id !== created.id)]);
+    onProductCreated?.(created);
+    return created;
+  };
+
+  const handleSaveNewProductLine = async (idx: number) => {
+    const ln = productLines[idx];
+    if (!ln) return;
+    setSavingNewProductIdx(idx);
+    try {
+      const created = await saveNewProduct(ln);
+      setProductLines((prev) => prev.map((row, i) => i === idx ? {
+        ...row,
+        mode: 'existing',
+        product_id: created.id,
+        product_name: created.name,
+        unit_price: String(created.price1 || created.price || row.unit_price || '0'),
+        image: null,
+      } : row));
+      toast({ title: `تم إضافة المنتج «${created.name}» للمخزون واختياره` });
+    } catch (err: any) {
+      toast({ title: 'تعذر حفظ المنتج الجديد', description: err.message, variant: 'destructive' });
+    } finally {
+      setSavingNewProductIdx(null);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const lines = productLines
-      .map((ln) => {
-        const prod = products.find((p) => p.id === ln.product_id);
-        const product_name = String(prod?.name || ln.product_name || '').trim();
-        if (!product_name) return null;
-        return {
-          product_id: prod?.id || ln.product_id || undefined,
-          product_name,
+    const lines: Array<{ product_id?: string; product_name: string; quantity: number; unit_price: number }> = [];
+    try {
+      for (const ln of productLines) {
+        let productId = ln.product_id;
+        let productName = ln.product_name;
+        let unitPrice = Math.max(0, Number(ln.unit_price) || 0);
+        if (ln.mode === 'new') {
+          const created = await saveNewProduct(ln);
+          productId = created.id;
+          productName = created.name;
+          if (!unitPrice) unitPrice = Number(created.price1 || created.price) || 0;
+        } else {
+          const prod = allProducts.find((p) => p.id === ln.product_id);
+          productName = String(prod?.name || ln.product_name || '').trim();
+          productId = prod?.id || ln.product_id;
+        }
+        if (!productName) continue;
+        lines.push({
+          product_id: productId || undefined,
+          product_name: productName,
           quantity: Math.max(1, Number(ln.quantity) || 1),
-          unit_price: Math.max(0, Number(ln.unit_price) || 0),
-        };
-      })
-      .filter(Boolean) as Array<{ product_id?: string; product_name: string; quantity: number; unit_price: number }>;
+          unit_price: unitPrice,
+        });
+      }
+    } catch (err: any) {
+      toast({ title: 'تعذر حفظ المنتج الجديد', description: err.message, variant: 'destructive' });
+      return;
+    }
+    if (lines.length === 0) {
+      toast({ title: 'أضف منتجاً واحداً على الأقل', variant: 'destructive' });
+      return;
+    }
     const first = lines[0];
     const { phone2, phone3, ...formRest } = form;
     const joinedPhone = joinWorkOrderPhoneFields(formRest.phone || '', phone2, phone3);
@@ -195,7 +370,7 @@ export function WorkOrderAddDialog({
     };
     await onSubmit(payload);
     setForm({ ...defaultForm, branch });
-    setProductLines([{ product_id: '', product_name: '', quantity: '1', unit_price: '0' }]);
+    setProductLines([emptyLine()]);
     onOpenChange(false);
   };
 
@@ -318,67 +493,228 @@ export function WorkOrderAddDialog({
                 type="button"
                 size="sm"
                 variant="outline"
-                onClick={() => setProductLines((prev) => [...prev, { product_id: '', product_name: '', quantity: '1', unit_price: '0' }])}
+                onClick={() => setProductLines((prev) => [...prev, emptyLine()])}
               >
                 إضافة منتج
               </Button>
             </div>
             {productLines.map((ln, idx) => {
-              const selected = products.find((p) => p.id === ln.product_id);
+              const selected = allProducts.find((p) => p.id === ln.product_id);
               const lineTotal = Math.max(1, Number(ln.quantity) || 1) * Math.max(0, Number(ln.unit_price) || 0);
+              const updateDraft = (patch: Partial<NewProductDraft>) =>
+                setProductLines((prev) => prev.map((row, i) => i === idx ? { ...row, draft: { ...row.draft, ...patch } } : row));
               return (
-                <div key={idx} className="grid grid-cols-12 gap-2 items-end">
-                  <div className="col-span-6 space-y-1.5">
+                <div key={idx} className="space-y-2 border rounded-md p-2 bg-muted/20">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <Label className="text-xs">منتج {idx + 1}</Label>
-                    <ProductSearchCombobox
-                      products={products.map((p) => ({ id: p.id, name: p.name, stock: Number(p.stock) || 0, sku_code: p.sku_code, barcode: p.barcode }))}
-                      value={ln.product_id}
-                      onValueChange={(id) =>
-                        setProductLines((prev) =>
-                          prev.map((row, i) =>
-                            i === idx
-                              ? {
-                                  ...row,
-                                  product_id: id,
-                                  product_name: products.find((p) => p.id === id)?.name || row.product_name,
-                                  unit_price: String(products.find((p) => p.id === id)?.price1 ?? row.unit_price ?? '0'),
-                                }
-                              : row,
-                          ),
-                        )
-                      }
-                      placeholder="اكتب حرف من اسم المنتج للبحث"
-                    />
+                    <div className="flex gap-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={ln.mode === 'existing' ? 'default' : 'outline'}
+                        className="h-7 text-xs"
+                        onClick={() => setProductLines((prev) => prev.map((row, i) => i === idx ? { ...row, mode: 'existing' } : row))}
+                      >
+                        منتج موجود
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={ln.mode === 'new' ? 'default' : 'outline'}
+                        className="h-7 text-xs"
+                        onClick={() => setProductLines((prev) => prev.map((row, i) => i === idx ? {
+                          ...row,
+                          mode: 'new',
+                          product_id: '',
+                          draft: row.draft.name ? row.draft : { ...emptyNewProduct(), name: row.product_name },
+                        } : row))}
+                      >
+                        منتج جديد
+                      </Button>
+                    </div>
                   </div>
-                  <div className="col-span-2 space-y-1.5">
-                    <Label className="text-xs">الكمية</Label>
-                    <Input
-                      type="number"
-                      min={1}
-                      value={ln.quantity}
-                      onChange={(e) => setProductLines((prev) => prev.map((row, i) => (i === idx ? { ...row, quantity: e.target.value } : row)))}
-                    />
-                  </div>
-                  <div className="col-span-2 space-y-1.5">
-                    <Label className="text-xs">سعر الوحدة</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      value={ln.unit_price}
-                      onChange={(e) => setProductLines((prev) => prev.map((row, i) => (i === idx ? { ...row, unit_price: e.target.value } : row)))}
-                    />
-                  </div>
-                  <div className="col-span-2 space-y-1.5">
-                    <Label className="text-xs">الإجمالي</Label>
-                    <Input value={String(lineTotal)} readOnly />
-                  </div>
-                  <div className="col-span-12 flex items-center justify-between text-xs text-muted-foreground">
+
+                  {ln.mode === 'existing' ? (
+                    <div className="grid grid-cols-12 gap-2 items-end">
+                      <div className="col-span-6 space-y-1.5">
+                        <ProductSearchCombobox
+                          products={allProducts.map((p) => ({ id: p.id, name: p.name, stock: Number(p.stock) || 0, sku_code: p.sku_code, barcode: p.barcode }))}
+                          value={ln.product_id}
+                          onValueChange={(id) =>
+                            setProductLines((prev) =>
+                              prev.map((row, i) =>
+                                i === idx
+                                  ? {
+                                      ...row,
+                                      product_id: id,
+                                      product_name: allProducts.find((p) => p.id === id)?.name || row.product_name,
+                                      unit_price: String(allProducts.find((p) => p.id === id)?.price1 ?? allProducts.find((p) => p.id === id)?.price ?? row.unit_price ?? '0'),
+                                    }
+                                  : row,
+                              ),
+                            )
+                          }
+                          placeholder="اكتب حرف من اسم المنتج للبحث"
+                        />
+                      </div>
+                      <div className="col-span-2 space-y-1.5">
+                        <Label className="text-xs">الكمية</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          value={ln.quantity}
+                          onChange={(e) => setProductLines((prev) => prev.map((row, i) => (i === idx ? { ...row, quantity: e.target.value } : row)))}
+                        />
+                      </div>
+                      <div className="col-span-2 space-y-1.5">
+                        <Label className="text-xs">سعر الوحدة</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          value={ln.unit_price}
+                          onChange={(e) => setProductLines((prev) => prev.map((row, i) => (i === idx ? { ...row, unit_price: e.target.value } : row)))}
+                        />
+                      </div>
+                      <div className="col-span-2 space-y-1.5">
+                        <Label className="text-xs">الإجمالي</Label>
+                        <Input value={String(lineTotal)} readOnly />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-[11px] text-muted-foreground">اكتب بيانات المنتج كاملة. يُحفظ في المخزون ويمكن اختياره لاحقاً من القائمة.</p>
+                      <div>
+                        <Label className="text-xs">اسم المنتج *</Label>
+                        <Input value={ln.draft.name} onChange={(e) => updateDraft({ name: e.target.value })} placeholder="مثال: فلتر RO 7 مراحل" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">SKU / كود الصنف</Label>
+                          <Input dir="ltr" value={ln.draft.sku} onChange={(e) => updateDraft({ sku: e.target.value })} placeholder="RO-7001" />
+                        </div>
+                        <div>
+                          <Label className="text-xs">الباركود</Label>
+                          <Input dir="ltr" value={ln.draft.barcode} onChange={(e) => updateDraft({ barcode: e.target.value })} />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">الوحدة</Label>
+                          <Input value={ln.draft.unit} onChange={(e) => updateDraft({ unit: e.target.value })} placeholder="قطعة" />
+                        </div>
+                        <div>
+                          <Label className="text-xs">حد التنبيه الأدنى</Label>
+                          <Input type="number" dir="ltr" value={ln.draft.min_stock} onChange={(e) => updateDraft({ min_stock: e.target.value })} />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">رصيد أول المدة</Label>
+                          <Input type="number" dir="ltr" value={ln.draft.stock} onChange={(e) => updateDraft({ stock: e.target.value })} />
+                        </div>
+                        <div>
+                          <Label className="text-xs">الضمان (شهر)</Label>
+                          <Input type="number" dir="ltr" value={ln.draft.warranty} onChange={(e) => updateDraft({ warranty: e.target.value })} />
+                        </div>
+                      </div>
+                      <div>
+                        <Label className="text-xs">المورد</Label>
+                        <Input value={ln.draft.supplier} onChange={(e) => updateDraft({ supplier: e.target.value })} placeholder="اسم المورد" />
+                      </div>
+                      <div>
+                        <Label className="text-xs">وصف / ملاحظات</Label>
+                        <Textarea className="min-h-[64px] text-sm" value={ln.draft.description} onChange={(e) => updateDraft({ description: e.target.value })} placeholder="مواصفات، ملاحظات تركيب..." />
+                      </div>
+                      <div>
+                        <Label className="text-xs">القسم</Label>
+                        <Select value={ln.draft.category || 'غير مصنف'} onValueChange={(v) => updateDraft({ category: v })}>
+                          <SelectTrigger><SelectValue placeholder="اختر القسم" /></SelectTrigger>
+                          <SelectContent>
+                            {categoryNames.map((name) => (
+                              <SelectItem key={`wo-cat-${idx}-${name}`} value={name}>{name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Input
+                          className="mt-1"
+                          value={ln.draft.category}
+                          onChange={(e) => updateDraft({ category: e.target.value })}
+                          placeholder="أو اكتب قسماً جديداً"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">موقع التخزين</Label>
+                        <Select value={normalizeStorageLocation(ln.draft.storage_location)} onValueChange={(v) => updateDraft({ storage_location: normalizeStorageLocation(v) })}>
+                          <SelectTrigger><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {STORAGE_LOCATION_OPTIONS.map((o) => (
+                              <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div>
+                          <Label className="text-xs">سعر التكلفة</Label>
+                          <Input type="number" dir="ltr" value={ln.draft.cost} onChange={(e) => updateDraft({ cost: e.target.value })} />
+                        </div>
+                        <div>
+                          <Label className="text-xs">سعر القطاعي *</Label>
+                          <Input type="number" dir="ltr" value={ln.draft.priceRetail} onChange={(e) => {
+                            const value = e.target.value;
+                            setProductLines((prev) => prev.map((row, i) => i === idx ? {
+                              ...row,
+                              unit_price: value || row.unit_price,
+                              draft: { ...row.draft, priceRetail: value },
+                            } : row));
+                          }} />
+                        </div>
+                        <div>
+                          <Label className="text-xs">سعر الجملة</Label>
+                          <Input type="number" dir="ltr" value={ln.draft.priceWholesale} onChange={(e) => updateDraft({ priceWholesale: e.target.value })} />
+                        </div>
+                      </div>
+                      <div>
+                        <Label className="text-xs">صورة المنتج</Label>
+                        <Input type="file" accept="image/*" onChange={(e) => setProductLines((prev) => prev.map((row, i) => i === idx ? { ...row, image: e.target.files?.[0] || null } : row))} />
+                        {ln.image && <p className="text-[11px] text-primary mt-1">تم اختيار: {ln.image.name}</p>}
+                      </div>
+                      <div className="grid grid-cols-12 gap-2 items-end">
+                        <div className="col-span-4 space-y-1.5">
+                          <Label className="text-xs">كمية أمر الشغل</Label>
+                          <Input type="number" min={1} value={ln.quantity} onChange={(e) => setProductLines((prev) => prev.map((row, i) => (i === idx ? { ...row, quantity: e.target.value } : row)))} />
+                        </div>
+                        <div className="col-span-4 space-y-1.5">
+                          <Label className="text-xs">سعر الوحدة في الأمر</Label>
+                          <Input type="number" min={0} value={ln.unit_price} onChange={(e) => setProductLines((prev) => prev.map((row, i) => (i === idx ? { ...row, unit_price: e.target.value } : row)))} />
+                        </div>
+                        <div className="col-span-4 space-y-1.5">
+                          <Label className="text-xs">إجمالي السطر</Label>
+                          <Input value={String(lineTotal)} readOnly />
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        className="w-full"
+                        disabled={savingNewProductIdx === idx}
+                        onClick={() => handleSaveNewProductLine(idx)}
+                      >
+                        {savingNewProductIdx === idx ? 'جاري حفظ المنتج...' : 'حفظ المنتج في المخزون واختياره'}
+                      </Button>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
                     <span>
-                      {selected
-                        ? `تم اختيار: ${selected.name} — المتاح: ${Number(selected.stock) || 0}`
-                        : ln.product_name
-                          ? `منتج محفوظ: ${ln.product_name}`
-                          : 'لم يتم اختيار منتج'}
+                      {ln.mode === 'new'
+                        ? (ln.draft.name ? `منتج جديد: ${ln.draft.name}` : 'املأ بيانات المنتج الجديد')
+                        : selected
+                          ? `تم اختيار: ${selected.name} — المتاح: ${Number(selected.stock) || 0}`
+                          : ln.product_name
+                            ? `منتج محفوظ: ${ln.product_name}`
+                            : 'لم يتم اختيار منتج'}
                     </span>
                     {productLines.length > 1 && (
                       <Button type="button" size="sm" variant="ghost" className="text-destructive" onClick={() => setProductLines((prev) => prev.filter((_, i) => i !== idx))}>

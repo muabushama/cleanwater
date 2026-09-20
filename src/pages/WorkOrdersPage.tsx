@@ -416,7 +416,7 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
   const [areas, setAreas] = useState<{ id: string; name: string }[]>([]);
   const [customers, setCustomers] = useState<CustomerForSuggest[]>([]);
   const [customerDevices, setCustomerDevices] = useState<WarrantyDeviceHint[]>([]);
-  const [products, setProducts] = useState<{ id: string; name: string; price1: number; price2: number; price3: number; stock?: number; sku_code?: string | null; barcode?: string | null }[]>([]);
+  const [products, setProducts] = useState<{ id: string; name: string; price?: number; price1: number; price2: number; price3: number; stock?: number; sku_code?: string | null; barcode?: string | null }[]>([]);
   const [initialCustomerForOrder, setInitialCustomerForOrder] = useState<CustomerForSuggest | null>(null);
   const [assigningId, setAssigningId] = useState<string | null>(null);
   const { toast } = useToast();
@@ -488,7 +488,7 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
       .select('customer_id,install_date,warranty_months,warranty_status,customer_code')
       .limit(4000)
       .then(({ data }) => setCustomerDevices(Array.isArray(data) ? (data as WarrantyDeviceHint[]) : []));
-    supabase.from('products').select('id,name,price1,price2,price3,stock,sku_code,barcode').in('branch', bv).limit(2000).then(({ data }) => setProducts(Array.isArray(data) ? data : []));
+    supabase.from('products').select('id,name,price,price1,price2,price3,stock,sku_code,barcode').in('branch', bv).limit(2000).then(({ data }) => setProducts(Array.isArray(data) ? data : []));
   }, [branch]);
 
   useEffect(() => {
@@ -988,6 +988,7 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
         customerDevices={customerDevices}
         initialCustomer={initialCustomerForOrder}
         onSubmit={handleAdd}
+        onProductCreated={(p) => setProducts((prev) => [p, ...prev.filter((x) => x.id !== p.id)])}
         loading={saving}
       />
       <WorkOrderAddDialog
@@ -1003,6 +1004,7 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
         title="تعديل أمر العمل"
         submitLabel="تعديل"
         onSubmit={handleEdit}
+        onProductCreated={(p) => setProducts((prev) => [p, ...prev.filter((x) => x.id !== p.id)])}
         loading={saving}
       />
     </motion.div>
