@@ -16,6 +16,8 @@ import { branchDbValuesForUiBranch, canonicalBranchForSave } from '@/lib/branchF
 import { promptDeletePassword } from '@/lib/deletePassword';
 import { matchesLooseSearch, matchesAnyLooseSearch, normalizeSearchText } from '@/lib/searchText';
 import { Badge } from '@/components/ui/badge';
+import { PhoneInput } from '@/components/PhoneInput';
+import { isCompletePhone11 } from '@/lib/phoneDigits';
 
 const BRANCH_OPTIONS = [
   { value: 'فرع الإسكندرية', label: 'الإسكندرية' },
@@ -323,6 +325,14 @@ export default function CustomersPage() {
   const handleAdd = async () => {
     if (!addForm.name.trim() || !addForm.phone1.trim() || !addForm.address.trim()) {
       toast({ title: 'خطأ', description: 'الاسم والهاتف والعنوان مطلوبون', variant: 'destructive' });
+      return;
+    }
+    if (!isCompletePhone11(addForm.phone1)) {
+      toast({ title: 'خطأ', description: 'رقم الهاتف يجب أن يكون 11 رقم', variant: 'destructive' });
+      return;
+    }
+    if (addForm.phone2.trim() && !isCompletePhone11(addForm.phone2)) {
+      toast({ title: 'خطأ', description: 'الرقم الإضافي يجب أن يكون 11 رقم أو فارغ', variant: 'destructive' });
       return;
     }
     if (sectors.length > 0 && (sectorId === 'none' || !addForm.area_id)) {
@@ -975,15 +985,15 @@ export default function CustomersPage() {
             <div className="grid grid-cols-3 gap-2">
               <div>
                 <Label className="text-xs">الهاتف *</Label>
-                <Input className="h-8 text-sm" value={addForm.phone1} onChange={(e) => setAddForm((p) => ({ ...p, phone1: e.target.value }))} placeholder="الهاتف" />
+                <PhoneInput className="h-8 text-sm" value={addForm.phone1} onValueChange={(v) => setAddForm((p) => ({ ...p, phone1: v }))} placeholder="11 رقم" />
               </div>
               <div>
                 <Label className="text-xs">رقم اضافي</Label>
-                <Input className="h-8 text-sm" value={addForm.phone2} onChange={(e) => setAddForm((p) => ({ ...p, phone2: e.target.value }))} placeholder="اختياري" />
+                <PhoneInput className="h-8 text-sm" value={addForm.phone2} onValueChange={(v) => setAddForm((p) => ({ ...p, phone2: v }))} placeholder="اختياري" />
               </div>
               <div>
                 <Label className="text-xs">واتساب</Label>
-                <Input className="h-8 text-sm" value={addForm.whatsapp} onChange={(e) => setAddForm((p) => ({ ...p, whatsapp: e.target.value }))} placeholder="اختياري" />
+                <PhoneInput className="h-8 text-sm" value={addForm.whatsapp} onValueChange={(v) => setAddForm((p) => ({ ...p, whatsapp: v }))} placeholder="اختياري" />
               </div>
             </div>
             <div>

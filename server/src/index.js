@@ -305,6 +305,9 @@ async function autoMigrate() {
     { t: "purchases", c: "paid", d: "DECIMAL(12,2) NOT NULL DEFAULT 0" },
     { t: "purchases", c: "remaining", d: "DECIMAL(12,2) NOT NULL DEFAULT 0" },
     { t: "purchases", c: "items", d: "JSON NULL" },
+    { t: "purchases", c: "invoice_file_url", d: "TEXT NULL" },
+    { t: "purchases", c: "rep_name", d: "VARCHAR(191) NULL" },
+    { t: "purchases", c: "created_by", d: "VARCHAR(36) NULL" },
   ];
 
   let added = 0;

@@ -10,8 +10,6 @@ import DashboardLayout from "./layouts/DashboardLayout";
 import DashboardPage from "./pages/DashboardPage";
 import CustomersPage from "./pages/CustomersPage";
 import InvoicesPage from "./pages/InvoicesPage";
-import MaintenancePage from "./pages/MaintenancePage";
-import WorkOrdersPage from "./pages/WorkOrdersPage";
 import InventoryPage from "./pages/InventoryPage";
 import SalesRepsPage from "./pages/SalesRepsPage";
 import FinancePage from "./pages/FinancePage";
@@ -22,7 +20,6 @@ import PurchasesPage from "./pages/PurchasesPage";
 import ReportsPage from "./pages/ReportsPage";
 import TrackingPage from "./pages/TrackingPage";
 import RepDeliveryPage from "./pages/RepDeliveryPage";
-import VisitsPage from "./pages/VisitsPage";
 import VisitsHubPage from "./pages/VisitsHubPage";
 import BackupPage from "./pages/BackupPage";
 import AreasPage from "./pages/AreasPage";
@@ -38,8 +35,8 @@ const queryClient = new QueryClient();
 function AppRoutes() {
   const { user, loading, signIn, signUp, isAdmin, isRep, isCustomerService, isWarehouseKeeper, profile, signOut } = useAuth();
   
-  // GPS tracking for sales reps
-  useGpsTracking(user?.id, isRep);
+  // GPS لكل حساب مسجّل (فنيين / مناديب) حتى يظهر التتبع للأدمن
+  useGpsTracking(user?.id, !!user);
   // Auto backup at local midnight while admin session stays open on this device
   useAdminAutoBackup(!!user && isAdmin);
 
@@ -78,11 +75,11 @@ function AppRoutes() {
           <Route path="/customer-service/follow-ups" element={<CustomerServiceFollowUpsPage />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/invoices" element={<InvoicesPage />} />
-          <Route path="/maintenance" element={<MaintenancePage />} />
-          <Route path="/work-orders" element={<WorkOrdersPage />} />
-          <Route path="/visits" element={<VisitsPage />} />
+          <Route path="/maintenance" element={<VisitsHubPage />} />
+          <Route path="/work-orders" element={<VisitsHubPage />} />
+          <Route path="/visits" element={<VisitsHubPage />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
-        <Route path="*" element={<CustomerServiceDashboardPage />} />
       </Routes>
     );
   }

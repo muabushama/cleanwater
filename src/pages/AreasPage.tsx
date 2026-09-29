@@ -12,6 +12,8 @@ import { Plus, Edit, Trash2, MapPin, Users, Search } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import { promptDeletePassword } from '@/lib/deletePassword';
+import { PhoneInput } from '@/components/PhoneInput';
+import { isCompletePhone11 } from '@/lib/phoneDigits';
 
 interface Area {
   id: string;
@@ -138,6 +140,10 @@ export default function AreasPage() {
   const handleAddCustomerToArea = async (area: Area) => {
     if (!newCustomer.name.trim() || !newCustomer.phone1.trim() || !newCustomer.address.trim()) {
       toast({ title: 'خطأ', description: 'اسم العميل، الهاتف والعنوان مطلوبة', variant: 'destructive' });
+      return;
+    }
+    if (!isCompletePhone11(newCustomer.phone1)) {
+      toast({ title: 'خطأ', description: 'رقم الهاتف يجب أن يكون 11 رقم', variant: 'destructive' });
       return;
     }
     setSavingCustomer(true);
@@ -419,9 +425,10 @@ export default function AreasPage() {
                   </div>
                   <div>
                     <Label>رقم الهاتف *</Label>
-                    <Input
+                    <PhoneInput
                       value={newCustomer.phone1}
-                      onChange={e => setNewCustomer(p => ({ ...p, phone1: e.target.value }))}
+                      onValueChange={(v) => setNewCustomer(p => ({ ...p, phone1: v }))}
+                      placeholder="11 رقم"
                     />
                   </div>
                 </div>

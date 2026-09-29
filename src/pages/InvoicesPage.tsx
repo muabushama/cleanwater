@@ -16,6 +16,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useUserBranch } from '@/hooks/useUserBranch';
 import logo from '@/assets/logo.png';
 import { invoiceCustomerCredit, invoiceDebtRemaining } from '@/lib/invoiceBalance';
+import { PRINT_INK_CSS } from '@/lib/printInk';
 import { promptDeletePassword, promptConfirmPassword } from '@/lib/deletePassword';
 import { branchDbValuesForUiBranch, canonicalBranchForSave } from '@/lib/branchFilters';
 
@@ -157,7 +158,8 @@ function PrintableInvoice({
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Cairo', sans-serif; }
-        body { padding: 2mm; color: #1a1a2e; font-size: 11px; }
+        ${PRINT_INK_CSS}
+        body { padding: 2mm; color: #000; font-size: 11px; font-weight: 700; }
         .invoice-copy {
           height: calc(50vh - 4mm);
           overflow: hidden;
@@ -216,9 +218,9 @@ function PrintableInvoice({
               <img src={logo} alt="Clean Water" style={{ width: 80, height: 80, objectFit: 'contain', border: '1px solid #ccc', borderRadius: 8, padding: 2 }} />
               <div>
                 <div style={{ fontSize: 28, fontWeight: 800, color: 'hsl(210 80% 30%)' }}>كلين ووتر</div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#444' }}>لتكنولوجيا معالجة مياه الشرب</div>
-                <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>خدمة العملاء: {companyInfo.customerService.join(' - ')}</div>
-                <div style={{ fontSize: 11, color: '#666' }}>الخط الساخن: {companyInfo.hotline}</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#000' }}>لتكنولوجيا معالجة مياه الشرب</div>
+                <div style={{ fontSize: 11, color: '#000', marginTop: 2, fontWeight: 700 }}>خدمة العملاء: {companyInfo.customerService.join(' - ')}</div>
+                <div style={{ fontSize: 11, color: '#000', fontWeight: 700 }}>الخط الساخن: {companyInfo.hotline}</div>
               </div>
             </div>
             <div>
@@ -230,28 +232,28 @@ function PrintableInvoice({
 
           {/* Invoice Meta */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 20, fontSize: 13 }}>
-            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>رقم الفاتورة:</span><span style={{ fontWeight: 700 }}>{invoice.invoice_number}</span></div>
-            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>التاريخ:</span><span style={{ fontWeight: 600 }}>{formatDateDisplay(invoice.date)}</span></div>
-            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>الحالة:</span><span className={statusClass} style={{ display: 'inline-block', padding: '3px 12px', borderRadius: 12, fontSize: 11, fontWeight: 700 }}>{statusText}</span></div>
-            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>نوع الدفع:</span><span style={{ fontWeight: 600 }}>{typeText}</span></div>
-            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>نوع الفاتورة:</span><span style={{ fontWeight: 600 }}>{(invoice as any).invoice_direction || 'مبيعات'}</span></div>
-            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>الفرع:</span><span style={{ fontWeight: 600 }}>{invoice.branch}</span></div>
-            {(invoice as any).due_date && <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>تاريخ الاستحقاق:</span><span style={{ fontWeight: 600 }}>{formatDateDisplay((invoice as any).due_date)}</span></div>}
-            {(invoice as any).delivery_status === 'delivered' && <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>حالة التسليم:</span><span style={{ fontWeight: 600, color: '#0d9488' }}>تم التسليم</span></div>}
-            {invoice.rep_name && <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>المندوب:</span><span style={{ fontWeight: 600 }}>{invoice.rep_name}</span></div>}
-            {(invoice as any).technician && <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>الفني:</span><span style={{ fontWeight: 600 }}>{(invoice as any).technician}</span></div>}
-            {(invoice as any).notes && <div style={{ display: 'flex', gap: 8, gridColumn: 'span 2' }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>ملاحظات:</span><span style={{ fontSize: 12 }}>{(invoice as any).notes}</span></div>}
+            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>رقم الفاتورة:</span><span style={{ fontWeight: 700 }}>{invoice.invoice_number}</span></div>
+            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>التاريخ:</span><span style={{ fontWeight: 600 }}>{formatDateDisplay(invoice.date)}</span></div>
+            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>الحالة:</span><span className={statusClass} style={{ display: 'inline-block', padding: '3px 12px', borderRadius: 12, fontSize: 11, fontWeight: 700 }}>{statusText}</span></div>
+            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>نوع الدفع:</span><span style={{ fontWeight: 600 }}>{typeText}</span></div>
+            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>نوع الفاتورة:</span><span style={{ fontWeight: 600 }}>{(invoice as any).invoice_direction || 'مبيعات'}</span></div>
+            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>الفرع:</span><span style={{ fontWeight: 600 }}>{invoice.branch}</span></div>
+            {(invoice as any).due_date && <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>تاريخ الاستحقاق:</span><span style={{ fontWeight: 600 }}>{formatDateDisplay((invoice as any).due_date)}</span></div>}
+            {(invoice as any).delivery_status === 'delivered' && <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>حالة التسليم:</span><span style={{ fontWeight: 600, color: '#0d9488' }}>تم التسليم</span></div>}
+            {invoice.rep_name && <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>المندوب:</span><span style={{ fontWeight: 600 }}>{invoice.rep_name}</span></div>}
+            {(invoice as any).technician && <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>الفني:</span><span style={{ fontWeight: 600 }}>{(invoice as any).technician}</span></div>}
+            {(invoice as any).notes && <div style={{ display: 'flex', gap: 8, gridColumn: 'span 2' }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>ملاحظات:</span><span style={{ fontSize: 12 }}>{(invoice as any).notes}</span></div>}
           </div>
 
           {/* Customer Info */}
           <div style={{ fontWeight: 700, fontSize: 14, color: 'hsl(210 80% 30%)', marginBottom: 8, borderBottom: '1px solid #ddd', paddingBottom: 4 }}>بيانات العميل</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 15, fontSize: 13 }}>
-            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>الاسم:</span><span style={{ fontWeight: 700 }}>{invoice.customer_name}</span></div>
+            <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>الاسم:</span><span style={{ fontWeight: 700 }}>{invoice.customer_name}</span></div>
             {customer && (
               <>
-                <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>الهاتف:</span><span>{customer.phone1}</span></div>
-                <div style={{ display: 'flex', gap: 8, gridColumn: 'span 2' }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>العنوان:</span><span>{customer.address}</span></div>
-                {customer.region && <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#666', minWidth: 80 }}>المنطقة:</span><span>{customer.region}</span></div>}
+                <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>الهاتف:</span><span>{customer.phone1}</span></div>
+                <div style={{ display: 'flex', gap: 8, gridColumn: 'span 2' }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>العنوان:</span><span>{customer.address}</span></div>
+                {customer.region && <div style={{ display: 'flex', gap: 8 }}><span style={{ fontWeight: 600, color: '#000', minWidth: 80 }}>المنطقة:</span><span>{customer.region}</span></div>}
               </>
             )}
           </div>

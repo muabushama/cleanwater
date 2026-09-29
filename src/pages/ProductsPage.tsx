@@ -12,7 +12,6 @@ import { useToast } from '@/hooks/use-toast';
 import { useUserBranch } from '@/hooks/useUserBranch';
 import { branchDbValuesForUiBranch, canonicalBranchForSave } from '@/lib/branchFilters';
 import { normalizeStorageLocation, STORAGE_LOCATION_OPTIONS, STORAGE_MAIN } from '@/lib/storageLocation';
-import { promptDeletePassword } from '@/lib/deletePassword';
 import type { Field } from '@/components/AddDialog';
 
 interface Product {
@@ -68,7 +67,7 @@ export default function ProductsPage({ isAdmin }: { isAdmin?: boolean }) {
     if (error) {
       setProducts([]);
     } else {
-      setProducts((data || []) as any as Product[]);
+      setProducts(((data || []) as any as Product[]).filter((p) => !String(p.name || '').startsWith('[محذوف]')));
     }
     setLoading(false);
   };
@@ -299,15 +298,30 @@ export default function ProductsPage({ isAdmin }: { isAdmin?: boolean }) {
   };
 
   const handleDeleteProduct = async (p: Product) => {
-    if (!confirm(`هل تريد حذف المنتج "${p.name}"؟`)) return;
-    if (!promptDeletePassword()) return;
+    if (!confirm(`هل تريد حذف المنتج "${p.name}"؟ لن يمكن التراجع.`)) return;
     try {
-      const { error } = await supabase.from('products').delete().eq('id', p.id);
+      await Promise.allSettled([
+        supabase.from('stock_movements').delete().eq('product_id', p.id),
+        supabase.from('rep_inventory').delete().eq('product_id', p.id),
+        supabase.from('rep_inventory_transfers').delete().eq('product_id', p.id),
+        supabase.from('invoice_lines').update({ product_id: null } as any).eq('product_id', p.id),
+        supabase.from('purchases').update({ product_id: null } as any).eq('product_id', p.id),
+        supabase.from('returns').update({ product_id: null } as any).eq('product_id', p.id),
+        supabase.from('invoices').update({ product_id: null } as any).eq('product_id', p.id),
+      ]);
+      let { error } = await supabase.from('products').delete().eq('id', p.id);
+      if (error) {
+        ({ error } = await supabase.from('products').update({
+          name: `[محذوف] ${p.name}`.slice(0, 180),
+          stock: 0,
+          min_stock: 0,
+        } as any).eq('id', p.id));
+      }
       if (error) throw error;
       toast({ title: 'تم حذف المنتج' });
       fetchProducts();
     } catch (err: any) {
-      toast({ title: 'خطأ', description: err.message, variant: 'destructive' });
+      toast({ title: 'تعذر حذف المنتج', description: err.message, variant: 'destructive' });
     }
   };
 

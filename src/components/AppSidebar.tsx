@@ -62,6 +62,7 @@ const customerServiceItems = [
   { title: 'العملاء', url: '/customers', icon: Users },
   { title: 'الفواتير', url: '/invoices', icon: FileText },
   { title: 'الزيارات', url: '/visits', icon: CalendarCheck },
+  { title: 'أوامر العمل', url: '/work-orders', icon: ClipboardList },
 ];
 
 interface AppSidebarProps {

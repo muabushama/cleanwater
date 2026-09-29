@@ -13,6 +13,9 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { formatEGP, companyInfo } from '@/data/demo-data';
+import { PRINT_INK_CSS } from '@/lib/printInk';
+import { PhoneInput } from '@/components/PhoneInput';
+import { isCompletePhone11 } from '@/lib/phoneDigits';
 import { invoiceDebtRemaining } from '@/lib/invoiceBalance';
 import { promptDeletePassword } from '@/lib/deletePassword';
 import { workOrderPhonesForPrint } from '@/lib/workOrderPrintPhones';
@@ -603,6 +606,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap');
       * { margin:0; padding:0; box-sizing:border-box; font-family:'Cairo',sans-serif; }
+      ${PRINT_INK_CSS}
       body { padding:20px; color:#000; font-size:15px; font-weight:800; }
       .container { max-width:800px; margin:0 auto; border:2px solid #000; padding:25px; }
       .top-address { text-align:center; font-size:13px; font-weight:800; color:#000; margin-bottom:8px; line-height:1.6; border-bottom:2px solid #000; padding-bottom:8px; }
@@ -633,7 +637,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       </div>
       <div class="header">
         <div class="header-logo"><img src="${logo}" alt="Clean Water Logo" /></div>
-        <div class="header-info"><div class="code">كود العميل: ${orderCodeLabel}</div><div style="font-size:11px;color:#000;font-weight:600;margin-top:2px">أمر عمل</div></div>
+        <div class="header-info"><div class="code">الكود: ${orderCodeLabel}</div><div style="font-size:11px;color:#000;font-weight:700;margin-top:2px">أمر عمل</div></div>
       </div>
       <div class="info">
         <div class="info-item"><span class="info-label">العميل:</span><div class="info-value">${wo.customer_name || '-'}</div></div>
@@ -642,14 +646,13 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
         <div class="info-item"><span class="info-label">العنوان:</span><div class="info-value">${wo.address || '-'}</div></div>
         <div class="info-item"><span class="info-label">المنطقة:</span><div class="info-value">${wo.region || '-'}</div></div>
         <div class="info-item"><span class="info-label">الفني:</span><div class="info-value">${wo.technician || '-'}</div></div>
-        <div class="info-item"><span class="info-label">المنتج:</span><div class="info-value">${wo.product_name || '-'}</div></div>
         <div class="info-item"><span class="info-label">الحالة:</span><div class="info-value">${wo.status || '-'}</div></div>
         <div class="info-item"><span class="info-label">حالة الضمان:</span><div class="info-value">${warrantyLabel}</div></div>
       </div>
       ${items.length > 0 ? `
         <table>
           <thead><tr><th>#</th><th>المنتج / البيان</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead>
-          <tbody>${items.map((it: any, idx: number) => {
+          <tbody>${items.filter((it: any) => !/^المنتج\s*:/i.test(String(it.description || it.product_name || '').trim())).map((it: any, idx: number) => {
             const desc = it.description || it.product_name || '-';
             const qty = Number(it.qty) || 1;
             const price = Number(it.value) || Number(it.unit_price) || 0;
@@ -659,7 +662,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
           <tr class="total-row"><td colspan="4" style="text-align:left">الإجمالي</td><td style="text-align:center;font-size:18px;font-weight:800">${total + transport} ج.م</td></tr>
           </tbody>
         </table>
-      ` : `<p style="text-align:center;padding:20px;color:#666">لا توجد بنود</p>`}
+      ` : `<p style="text-align:center;padding:20px;color:#000;font-weight:700">لا توجد بنود</p>`}
       ${wo.notes ? `<div style="background:#f8f9fa;padding:10px;border-radius:4px;margin:12px 0;font-size:13px;font-weight:600"><b>ملاحظات:</b> ${wo.notes}</div>` : ''}
       <div class="sigs">
         <div><div style="font-weight:800;font-size:14px;margin-bottom:40px">توقيع العميل</div><div class="sig-line">التوقيع والاسم</div></div>
@@ -948,6 +951,18 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
 
   const saveEditCustomer = async () => {
     if (!selectedCustomer) return;
+    if (!isCompletePhone11(editCustomerForm.phone1 || '')) {
+      toast({ title: 'خطأ', description: 'رقم الهاتف يجب أن يكون 11 رقم', variant: 'destructive' });
+      return;
+    }
+    if (editCustomerForm.phone2 && !isCompletePhone11(editCustomerForm.phone2)) {
+      toast({ title: 'خطأ', description: 'رقم الهاتف البديل يجب أن يكون 11 رقم', variant: 'destructive' });
+      return;
+    }
+    if (editCustomerForm.whatsapp && !isCompletePhone11(editCustomerForm.whatsapp)) {
+      toast({ title: 'خطأ', description: 'رقم الواتساب يجب أن يكون 11 رقم', variant: 'destructive' });
+      return;
+    }
     setSaving(true);
     try {
       const { error } = await supabase.from('customers').update({
@@ -1176,9 +1191,9 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                 {editingCustomer ? (
                   <div className="space-y-1.5">
                     <div><Label className="text-[10px]">الاسم</Label><Input value={editCustomerForm.name || ''} onChange={e => setEditCustomerForm(p => ({...p, name: e.target.value}))} className="h-6 text-xs" /></div>
-                    <div><Label className="text-[10px]">الهاتف</Label><Input value={editCustomerForm.phone1 || ''} onChange={e => setEditCustomerForm(p => ({...p, phone1: e.target.value}))} className="h-6 text-xs" /></div>
-                    <div><Label className="text-[10px]">هاتف بديل</Label><Input value={editCustomerForm.phone2 || ''} onChange={e => setEditCustomerForm(p => ({...p, phone2: e.target.value}))} className="h-6 text-xs" /></div>
-                    <div><Label className="text-[10px]">واتساب</Label><Input value={editCustomerForm.whatsapp || ''} onChange={e => setEditCustomerForm(p => ({...p, whatsapp: e.target.value}))} className="h-6 text-xs" /></div>
+                    <div><Label className="text-[10px]">الهاتف</Label><PhoneInput value={editCustomerForm.phone1 || ''} onValueChange={(v) => setEditCustomerForm(p => ({...p, phone1: v}))} className="h-6 text-xs" /></div>
+                    <div><Label className="text-[10px]">هاتف بديل</Label><PhoneInput value={editCustomerForm.phone2 || ''} onValueChange={(v) => setEditCustomerForm(p => ({...p, phone2: v}))} className="h-6 text-xs" /></div>
+                    <div><Label className="text-[10px]">واتساب</Label><PhoneInput value={editCustomerForm.whatsapp || ''} onValueChange={(v) => setEditCustomerForm(p => ({...p, whatsapp: v}))} className="h-6 text-xs" /></div>
                     <div><Label className="text-[10px]">العنوان</Label><Input value={editCustomerForm.address || ''} onChange={e => setEditCustomerForm(p => ({...p, address: e.target.value}))} className="h-6 text-xs" /></div>
                     <div><Label className="text-[10px]">المنطقة</Label><Input value={editCustomerForm.region || ''} onChange={e => setEditCustomerForm(p => ({...p, region: e.target.value}))} className="h-6 text-xs" /></div>
                     <div><Label className="text-[10px]">ملاحظات</Label><Input value={editCustomerForm.notes || ''} onChange={e => setEditCustomerForm(p => ({...p, notes: e.target.value}))} className="h-6 text-xs" /></div>
@@ -1537,7 +1552,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                         <div><Label className="text-[10px]">التاريخ</Label><Input type="date" value={breakdownForm.next_date} onChange={e => setBreakdownForm(p => ({...p, next_date: e.target.value}))} className="h-7 text-xs" /></div>
                         <div><Label className="text-[10px]">الفني</Label><Input value={breakdownForm.technician} onChange={e => setBreakdownForm(p => ({...p, technician: e.target.value}))} className="h-7 text-xs" /></div>
                         <div><Label className="text-[10px]">التكلفة</Label><Input type="number" value={breakdownForm.cost} onChange={e => setBreakdownForm(p => ({...p, cost: +e.target.value}))} className="h-7 text-xs" /></div>
-                        <div><Label className="text-[10px]">الهاتف</Label><Input value={breakdownForm.phone || selectedCustomer.phone1} onChange={e => setBreakdownForm(p => ({...p, phone: e.target.value}))} className="h-7 text-xs" /></div>
+                        <div><Label className="text-[10px]">الهاتف</Label><PhoneInput value={breakdownForm.phone || selectedCustomer.phone1} onValueChange={(v) => setBreakdownForm(p => ({...p, phone: v}))} className="h-7 text-xs" /></div>
                         <div className="col-span-2"><Label className="text-[10px]">وصف العطل</Label><Input value={breakdownForm.notes} onChange={e => setBreakdownForm(p => ({...p, notes: e.target.value}))} className="h-7 text-xs" placeholder="اكتب وصف العطل هنا..." /></div>
                       </div>
                       <div className="flex gap-2">
@@ -1683,7 +1698,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
                                   <div><Label className="text-[10px]">التاريخ</Label><Input type="date" value={editBreakdownForm.next_date || ''} onChange={e => setEditBreakdownForm((p: any) => ({...p, next_date: e.target.value}))} className="h-6 text-xs" /></div>
                                   <div><Label className="text-[10px]">الفني</Label><Input value={editBreakdownForm.technician || ''} onChange={e => setEditBreakdownForm((p: any) => ({...p, technician: e.target.value}))} className="h-6 text-xs" /></div>
                                   <div><Label className="text-[10px]">التكلفة</Label><Input type="number" value={editBreakdownForm.cost || 0} onChange={e => setEditBreakdownForm((p: any) => ({...p, cost: +e.target.value}))} className="h-6 text-xs" /></div>
-                                  <div><Label className="text-[10px]">الهاتف</Label><Input value={editBreakdownForm.phone || ''} onChange={e => setEditBreakdownForm((p: any) => ({...p, phone: e.target.value}))} className="h-6 text-xs" /></div>
+                                  <div><Label className="text-[10px]">الهاتف</Label><PhoneInput value={editBreakdownForm.phone || ''} onValueChange={(v) => setEditBreakdownForm((p: any) => ({...p, phone: v}))} className="h-6 text-xs" /></div>
                                   <div><Label className="text-[10px]">الحالة</Label>
                                     <Select value={editBreakdownForm.status || 'upcoming'} onValueChange={v => setEditBreakdownForm((p: any) => ({...p, status: v}))}>
                                       <SelectTrigger className="h-6 text-xs"><SelectValue /></SelectTrigger>

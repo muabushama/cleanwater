@@ -681,10 +681,16 @@ export default function InventoryPage() {
       const incoming = signedQty > 0 ? signedQty : 0;
       const outgoing = signedQty < 0 ? Math.abs(signedQty) : 0;
       const total = (incoming > 0 ? incoming : outgoing) * unitPrice;
-      const entity =
+      const entityBase =
         (m.type === 'purchase' && (pur?.supplier_name || 'مورد')) ||
         (m.type === 'sale' && (inv?.customer_name || 'عميل')) ||
         (m.reference_type === 'opening_balance' ? 'رصيد أول المدة' : 'مراجعة جرد');
+      const techName =
+        technicianNameById[String(m.technician_user_id || '').trim()] ||
+        extractTechnicianName(String(m.notes || '')) ||
+        String(pur?.rep_name || '').trim() ||
+        '';
+      const entity = techName ? `${entityBase} | الفني: ${techName}` : entityBase;
       const code = prod?.sku_code || prod?.barcode || String(m.product_id || '').slice(0, 8);
       const locationLabel = movementRowLocation(m, prod) === STORAGE_SHOWROOM ? 'المعرض' : 'المخزن الرئيسي';
 
@@ -708,7 +714,7 @@ export default function InventoryPage() {
       };
     });
     return rows;
-  }, [stockMovements, products, invoiceRefs, purchaseRefs, countDateFrom, countDateTo, movementTypeFilter, movementLocationFilter]);
+  }, [stockMovements, products, invoiceRefs, purchaseRefs, countDateFrom, countDateTo, movementTypeFilter, movementLocationFilter, technicianNameById]);
 
   const countStats = useMemo(() => {
     const from = countDateFrom || '';

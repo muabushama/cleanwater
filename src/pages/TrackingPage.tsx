@@ -53,7 +53,7 @@ export default function TrackingPage() {
     if (!opts?.silent) setLoading(true);
     try {
       const [rolesRes, locResult] = await Promise.all([
-        supabase.from('user_roles').select('user_id, role').in('role', ['sales_rep', 'staff']),
+        supabase.from('user_roles').select('user_id, role').in('role', ['sales_rep', 'staff', 'warehouse_keeper']),
         supabase
           .from('rep_locations')
           .select('*')
@@ -63,6 +63,7 @@ export default function TrackingPage() {
 
       const locRows = Array.isArray(locResult.data) ? locResult.data : [];
       const roleRows = Array.isArray(rolesRes.data) ? rolesRes.data : [];
+      const allProfiles = await supabase.from('profiles').select('id, full_name').limit(800);
 
       const latestByUser = new Map<string, any>();
       locRows.forEach((loc: any) => {
@@ -73,11 +74,10 @@ export default function TrackingPage() {
       const allIds = [...new Set([
         ...roleRows.map((r: any) => String(r.user_id || '')),
         ...latestByUser.keys(),
+        ...(allProfiles.data || []).map((p: any) => String(p?.id || '')),
       ].filter(Boolean))];
 
-      const profilesRes = allIds.length
-        ? await supabase.from('profiles').select('id, full_name').in('id', allIds)
-        : { data: [] as { id: string; full_name: string }[] };
+      const profilesRes = { data: allProfiles.data || [] as { id: string; full_name: string }[] };
 
       const profileMap = new Map<string, string>();
       (profilesRes.data || []).forEach((p: any) => {

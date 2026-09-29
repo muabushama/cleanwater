@@ -118,3 +118,21 @@
     box-shadow: 0 4px 6px -1px hsl(210 30% 80% / 0.2), 0 10px 25px -5px hsl(210 30% 80% / 0.15);
   }
 }
+
+@media print {
+  * {
+    color: #000 !important;
+    font-weight: 700 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  body, p, td, th, span, div, h1, h2, h3, label, a {
+    color: #000 !important;
+    font-weight: 700 !important;
+  }
+  .text-muted-foreground,
+  .text-muted,
+  [class*="text-muted"] {
+    color: #000 !important;
+  }
+}

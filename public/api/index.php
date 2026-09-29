@@ -264,6 +264,7 @@ function oasisEnsureMysqlSchema(PDO $pdo): void
         "CREATE TABLE IF NOT EXISTS stations (id VARCHAR(36) PRIMARY KEY, name VARCHAR(191) NOT NULL, customer_id VARCHAR(36) NULL, customer_name VARCHAR(191) NOT NULL DEFAULT '', customer_phone VARCHAR(50) NULL, customer_address TEXT NULL, area VARCHAR(191) NULL, address TEXT NULL, station_type VARCHAR(100) NULL, capacity VARCHAR(191) NULL, install_date DATE NULL, warranty_months INT NOT NULL DEFAULT 12, warranty_end DATE NULL, contract_type VARCHAR(100) NOT NULL DEFAULT 'بدون عقد', contract_value DECIMAL(12,2) NOT NULL DEFAULT 0, contract_duration_months INT NOT NULL DEFAULT 0, contract_start_date DATE NULL, contract_end_date DATE NULL, contract_first_visit_date DATE NULL, contract_installments_count INT NOT NULL DEFAULT 0, contract_installment_interval_months INT NOT NULL DEFAULT 1, contract_first_installment_date DATE NULL, location TEXT NULL, branch VARCHAR(191) NOT NULL DEFAULT 'فرع الإسكندرية', status VARCHAR(50) NOT NULL DEFAULT 'active', notes TEXT NULL, created_by VARCHAR(36) NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY idx_stations_branch (branch))",
         "CREATE TABLE IF NOT EXISTS station_maintenance (id VARCHAR(36) PRIMARY KEY, station_id VARCHAR(36) NOT NULL, maintenance_date DATE NOT NULL, maintenance_type VARCHAR(100) NOT NULL DEFAULT 'صيانة دورية', description TEXT NULL, parts_used TEXT NULL, parts_cost DECIMAL(12,2) NOT NULL DEFAULT 0, labor_cost DECIMAL(12,2) NOT NULL DEFAULT 0, total_cost DECIMAL(12,2) NOT NULL DEFAULT 0, total_sale DECIMAL(12,2) NOT NULL DEFAULT 0, collected DECIMAL(12,2) NOT NULL DEFAULT 0, product_lines JSON NULL, changed_candles JSON NULL, technician VARCHAR(191) NULL, notes TEXT NULL, branch VARCHAR(191) NOT NULL DEFAULT 'فرع الإسكندرية', created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY idx_station_maint_station (station_id), KEY idx_station_maint_date (maintenance_date), KEY idx_station_maint_branch (branch))",
         "CREATE TABLE IF NOT EXISTS station_contract_installments (id VARCHAR(36) PRIMARY KEY, station_id VARCHAR(36) NOT NULL, installment_date DATE NULL, amount DECIMAL(12,2) NOT NULL DEFAULT 0, status VARCHAR(100) NOT NULL DEFAULT 'معلق', collection_date DATE NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY idx_sci_station (station_id))",
+        "CREATE TABLE IF NOT EXISTS rep_locations (id VARCHAR(36) PRIMARY KEY, user_id VARCHAR(36) NOT NULL, latitude DOUBLE NOT NULL, longitude DOUBLE NOT NULL, accuracy DOUBLE NOT NULL DEFAULT 0, recorded_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY idx_rep_locations_user_time (user_id, recorded_at))",
     ];
     foreach ($creates as $sql) {
         try {
@@ -324,6 +325,8 @@ function oasisEnsureMysqlSchema(PDO $pdo): void
         ['purchases', 'remaining', 'DECIMAL(12,2) NOT NULL DEFAULT 0'],
         ['purchases', 'items', 'JSON NULL'],
         ['purchases', 'invoice_file_url', 'TEXT NULL'],
+        ['purchases', 'rep_name', 'VARCHAR(191) NULL'],
+        ['purchases', 'created_by', 'VARCHAR(36) NULL'],
     ];
     foreach ($alters as [$t, $c, $ddl]) {
         try {
@@ -1258,8 +1261,20 @@ try {
                     }
                 }
 
-                $stmt = $pdo->prepare('DELETE FROM `' . $table . '`' . $where['sql']);
-                $stmt->execute($where['params']);
+                try {
+                    $pdo->exec('SET FOREIGN_KEY_CHECKS=0');
+                    $stmt = $pdo->prepare('DELETE FROM `' . $table . '`' . $where['sql']);
+                    $stmt->execute($where['params']);
+                    $pdo->exec('SET FOREIGN_KEY_CHECKS=1');
+                } catch (Throwable $deleteError) {
+                    try { $pdo->exec('SET FOREIGN_KEY_CHECKS=1'); } catch (Throwable $ignored) {}
+                    if ($table === 'products') {
+                        $hideStmt = $pdo->prepare('UPDATE `products` SET `name` = CONCAT("[محذوف] ", `name`), `stock` = 0, `min_stock` = 0' . $where['sql']);
+                        $hideStmt->execute($where['params']);
+                        sendJson(200, ['data' => [], 'error' => null]);
+                    }
+                    throw $deleteError;
+                }
                 sendJson(200, ['data' => [], 'error' => null]);
             } catch (Throwable $e) {
                 sendJson(400, ['data' => null, 'error' => ['message' => $e->getMessage()]]);

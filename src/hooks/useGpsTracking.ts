@@ -8,12 +8,17 @@ function mysqlDateTime(date = new Date()) {
 
 export function useGpsTracking(userId: string | undefined, enabled: boolean) {
   const intervalRef = useRef<ReturnType<typeof setInterval>>();
+  const watchRef = useRef<number | null>(null);
+  const lastSentRef = useRef(0);
 
   useEffect(() => {
     if (!userId || !enabled) return;
     if (!navigator.geolocation) return;
 
     const sendLocation = (position: GeolocationPosition) => {
+      const now = Date.now();
+      if (now - lastSentRef.current < 15000) return;
+      lastSentRef.current = now;
       supabase
         .from('rep_locations')
         .insert({
@@ -33,12 +38,22 @@ export function useGpsTracking(userId: string | undefined, enabled: boolean) {
       navigator.geolocation.getCurrentPosition(
         sendLocation,
         (err) => console.error('Geolocation error:', err),
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 },
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 10000 },
       );
     };
 
     requestOnce();
-    intervalRef.current = setInterval(requestOnce, 60 * 1000);
+    intervalRef.current = setInterval(requestOnce, 45 * 1000);
+
+    try {
+      watchRef.current = navigator.geolocation.watchPosition(
+        sendLocation,
+        (err) => console.error('Geolocation watch error:', err),
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 10000 },
+      );
+    } catch {
+      watchRef.current = null;
+    }
 
     const onVisible = () => {
       if (document.visibilityState === 'visible') requestOnce();
@@ -48,6 +63,7 @@ export function useGpsTracking(userId: string | undefined, enabled: boolean) {
     return () => {
       document.removeEventListener('visibilitychange', onVisible);
       if (intervalRef.current) clearInterval(intervalRef.current);
+      if (watchRef.current != null) navigator.geolocation.clearWatch(watchRef.current);
     };
   }, [userId, enabled]);
 }

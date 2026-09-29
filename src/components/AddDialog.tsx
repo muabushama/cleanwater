@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Upload, X } from 'lucide-react';
+import { isPhoneFieldName, sanitizePhoneDigits, isCompletePhone11 } from '@/lib/phoneDigits';
 
 export interface Field {
   name: string;
@@ -64,6 +65,16 @@ export function AddDialog({ open, onOpenChange, title, fields, onSubmit, loading
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const missingPhone = fields.find((f) => {
+      if (f.type === 'file' || f.type === 'select' || f.type === 'textarea' || f.type === 'number' || f.type === 'date') return false;
+      if (!isPhoneFieldName(`${f.name} ${f.label}`)) return false;
+      if (!f.required && !String(values[f.name] || '').trim()) return false;
+      return !isCompletePhone11(values[f.name] || '');
+    });
+    if (missingPhone) {
+      window.alert(`رقم التليفون يجب أن يكون 11 رقم (${missingPhone.label})`);
+      return;
+    }
     await onSubmit(values, Object.keys(files).length > 0 ? files : undefined);
     // Reset
     const init: Record<string, string> = {};
@@ -147,11 +158,18 @@ export function AddDialog({ open, onOpenChange, title, fields, onSubmit, loading
               ) : (
                 <Input
                   id={field.name}
-                  type={field.type || 'text'}
+                  type={isPhoneFieldName(`${field.name} ${field.label}`) ? 'tel' : (field.type || 'text')}
+                  inputMode={isPhoneFieldName(`${field.name} ${field.label}`) ? 'numeric' : undefined}
+                  maxLength={isPhoneFieldName(`${field.name} ${field.label}`) ? 11 : undefined}
                   value={values[field.name] || ''}
-                  onChange={e => setValues(prev => ({ ...prev, [field.name]: e.target.value }))}
+                  onChange={e => setValues(prev => ({
+                    ...prev,
+                    [field.name]: isPhoneFieldName(`${field.name} ${field.label}`)
+                      ? sanitizePhoneDigits(e.target.value)
+                      : e.target.value,
+                  }))}
                   required={field.required}
-                  dir={field.type === 'number' ? 'ltr' : undefined}
+                  dir={field.type === 'number' || isPhoneFieldName(`${field.name} ${field.label}`) ? 'ltr' : undefined}
                 />
               )}
             </div>

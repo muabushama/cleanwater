@@ -15,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useUserBranch } from '@/hooks/useUserBranch';
 import { branchDbValuesForUiBranch, canonicalBranchForSave } from '@/lib/branchFilters';
 import { promptDeletePassword } from '@/lib/deletePassword';
+import { PhoneInput } from '@/components/PhoneInput';
 import { normalizeStorageLocation, STORAGE_MAIN, STORAGE_SHOWROOM } from '@/lib/storageLocation';
 
 interface Rep {
@@ -809,7 +810,7 @@ export default function SalesRepsPage({ isAdmin }: { isAdmin?: boolean }) {
           <DialogHeader><DialogTitle>تعديل مندوب</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>الاسم</Label><Input value={repEditForm.full_name} onChange={e => setRepEditForm(p => ({ ...p, full_name: e.target.value }))} /></div>
-            <div><Label>الهاتف</Label><Input value={repEditForm.phone} onChange={e => setRepEditForm(p => ({ ...p, phone: e.target.value }))} dir="ltr" /></div>
+            <div><Label>الهاتف</Label><PhoneInput value={repEditForm.phone} onValueChange={(v) => setRepEditForm(p => ({ ...p, phone: v }))} /></div>
             <div>
               <Label>الفرع</Label>
               <Select value={repEditForm.branch_id} onValueChange={v => setRepEditForm(p => ({ ...p, branch_id: v }))}>
@@ -830,7 +831,7 @@ export default function SalesRepsPage({ isAdmin }: { isAdmin?: boolean }) {
           <DialogHeader><DialogTitle>تعديل أمين مخزن</DialogTitle></DialogHeader>
           <div className="space-y-3">
             <div><Label>الاسم</Label><Input value={wkEditForm.full_name} onChange={e => setWkEditForm(p => ({ ...p, full_name: e.target.value }))} /></div>
-            <div><Label>الهاتف</Label><Input value={wkEditForm.phone} onChange={e => setWkEditForm(p => ({ ...p, phone: e.target.value }))} dir="ltr" /></div>
+            <div><Label>الهاتف</Label><PhoneInput value={wkEditForm.phone} onValueChange={(v) => setWkEditForm(p => ({ ...p, phone: v }))} /></div>
             <div>
               <Label>الفرع</Label>
               <Select value={wkEditForm.branch_id} onValueChange={v => setWkEditForm(p => ({ ...p, branch_id: v }))}>

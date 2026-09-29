@@ -23,6 +23,7 @@ import { branchDbValuesForUiBranch, canonicalBranchForSave } from '@/lib/branchF
 import { formatDateDayMonthYear } from '@/lib/dateDisplay';
 import { ProductSearchCombobox } from '@/components/inventory/ProductSearchCombobox';
 import { joinWorkOrderPhoneFields, splitWorkOrderPhoneFields } from '@/lib/workOrderPrintPhones';
+import { PhoneInput } from '@/components/PhoneInput';
 import { invoiceCustomerCredit, invoiceDebtRemaining } from '@/lib/invoiceBalance';
 
 interface Station {
@@ -1339,9 +1340,9 @@ export default function StationsPage() {
             <p className="text-xs font-semibold text-muted-foreground border-b pb-1 pt-2">بيانات العميل</p>
             <div className="grid grid-cols-2 gap-2">
               <div><Label>اسم العميل</Label><Input value={form.customer_name} onChange={(e) => setForm((p) => ({ ...p, customer_name: e.target.value }))} /></div>
-              <div><Label>رقم التلفون</Label><Input dir="ltr" value={form.customer_phone} onChange={(e) => setForm((p) => ({ ...p, customer_phone: e.target.value }))} placeholder="01xxxxxxxxx" /></div>
-              <div><Label>رقم إضافي</Label><Input dir="ltr" value={form.customer_phone2} onChange={(e) => setForm((p) => ({ ...p, customer_phone2: e.target.value }))} placeholder="اختياري" /></div>
-              <div><Label>رقم إضافي 2</Label><Input dir="ltr" value={form.customer_phone3} onChange={(e) => setForm((p) => ({ ...p, customer_phone3: e.target.value }))} placeholder="اختياري" /></div>
+              <div><Label>رقم التلفون</Label><PhoneInput value={form.customer_phone} onValueChange={(v) => setForm((p) => ({ ...p, customer_phone: v }))} placeholder="11 رقم" /></div>
+              <div><Label>رقم إضافي</Label><PhoneInput value={form.customer_phone2} onValueChange={(v) => setForm((p) => ({ ...p, customer_phone2: v }))} placeholder="اختياري" /></div>
+              <div><Label>رقم إضافي 2</Label><PhoneInput value={form.customer_phone3} onValueChange={(v) => setForm((p) => ({ ...p, customer_phone3: v }))} placeholder="اختياري" /></div>
             </div>
             <div><Label>عنوان العميل</Label><Input value={form.customer_address} onChange={(e) => setForm((p) => ({ ...p, customer_address: e.target.value }))} /></div>
 

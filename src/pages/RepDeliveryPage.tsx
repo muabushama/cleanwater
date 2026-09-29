@@ -14,6 +14,9 @@ import { useToast } from '@/hooks/use-toast';
 import logo from '@/assets/logo.png';
 import { matchesLooseSearch } from '@/lib/searchText';
 import { invoiceCustomerCredit, invoiceDebtRemaining } from '@/lib/invoiceBalance';
+import { PhoneInput } from '@/components/PhoneInput';
+import { isCompletePhone11 } from '@/lib/phoneDigits';
+import { PRINT_INK_CSS } from '@/lib/printInk';
 import {
   canonicalPurchaseFileUrl,
   isPurchaseImageFile,
@@ -220,6 +223,10 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
       toast({ title: 'خطأ', description: 'يرجى ملء اسم العميل واختيار المنتج', variant: 'destructive' });
       return;
     }
+    if (saleForm.phone.trim() && !isCompletePhone11(saleForm.phone)) {
+      toast({ title: 'خطأ', description: 'رقم الهاتف يجب أن يكون 11 رقم', variant: 'destructive' });
+      return;
+    }
 
     const product = products.find(p => p.id === saleForm.product_id);
     if (product && product.stock < saleForm.quantity) {
@@ -373,6 +380,7 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
         rep_name: profile?.full_name || '',
         notes: purchaseForm.notes.trim() || null,
         invoice_file_url,
+        created_by: userId,
       };
       let insertRes = await supabase.from('purchases').insert(payload);
       if (insertRes.error) {
@@ -382,8 +390,12 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
         delete payload.remaining;
         insertRes = await supabase.from('purchases').insert(payload);
       }
+      if (insertRes.error) {
+        delete payload.created_by;
+        insertRes = await supabase.from('purchases').insert(payload);
+      }
       if (insertRes.error) throw insertRes.error;
-      await supabase.from('stock_movements').insert({
+      const movementPayload: Record<string, unknown> = {
         id: crypto.randomUUID(),
         product_id: purchaseForm.product_id,
         branch: branchName,
@@ -391,8 +403,14 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
         quantity: qty,
         reference_type: 'purchase',
         reference_id: id,
-        notes: `مشتريات ${purchaseNumber}`,
-      });
+        technician_user_id: userId,
+        notes: `مشتريات ${purchaseNumber} | فني: ${profile?.full_name || ''}`,
+      };
+      let movementRes = await supabase.from('stock_movements').insert(movementPayload);
+      if (movementRes.error && /technician_user_id|Unknown column/i.test(movementRes.error.message || '')) {
+        delete movementPayload.technician_user_id;
+        movementRes = await supabase.from('stock_movements').insert(movementPayload);
+      }
       if (product) {
         const newStock = (Number(product.stock) || 0) + qty;
         await supabase.from('products').update({ stock: newStock }).eq('id', purchaseForm.product_id);
@@ -423,26 +441,28 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Cairo', sans-serif; }
-        body { padding: 20px; color: #1a1a2e; }
+        ${PRINT_INK_CSS}
+        body { padding: 20px; }
+        .label { font-weight: 700; }
         .container { max-width: 700px; margin: 0 auto; border: 2px solid #1a3a5c; padding: 25px; }
         .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #1a3a5c; padding-bottom: 12px; margin-bottom: 15px; }
         .company { font-size: 20px; font-weight: 800; color: #1a3a5c; }
         .title { background: linear-gradient(135deg, #1a3a5c, #2d5f8a); color: white; padding: 6px 25px; border-radius: 6px; font-size: 18px; font-weight: 700; }
         .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 12px 0; font-size: 13px; }
-        .label { font-weight: 600; color: #666; }
+        .label { font-weight: 700; color: #000; }
         table { width: 100%; border-collapse: collapse; margin: 12px 0; }
         th, td { padding: 8px; border: 1px solid #ddd; font-size: 12px; text-align: right; }
         th { background: #f0f4f8; }
         .amounts { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin: 12px 0; }
         .amount-box { text-align: center; padding: 8px; border-radius: 6px; color: white; }
         .total { background: #1a3a5c; } .paid { background: #2d8a6e; } .rem { background: #c0392b; } .cred { background: #1e7e34; }
-        .sigs { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; text-align: center; margin-top: 30px; font-size: 11px; color: #666; }
-        .sig-line { border-top: 1px dashed #999; margin-top: 40px; padding-top: 4px; }
-        .footer { margin-top: 15px; padding-top: 8px; border-top: 1px solid #ddd; font-size: 9px; color: #888; text-align: center; }
+        .sigs { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; text-align: center; margin-top: 30px; font-size: 11px; color: #000; font-weight: 700; }
+        .sig-line { border-top: 1px dashed #000; margin-top: 40px; padding-top: 4px; }
+        .footer { margin-top: 15px; padding-top: 8px; border-top: 1px solid #000; font-size: 9px; color: #000; text-align: center; font-weight: 700; }
       </style></head><body>
       <div class="container">
         <div class="header">
-          <div><div class="company">كلين ووتر</div><div style="font-size:10px;color:#666">لتكنولوجيا معالجة مياه الشرب</div></div>
+          <div><div class="company">كلين ووتر</div><div style="font-size:10px;color:#000;font-weight:700">لتكنولوجيا معالجة مياه الشرب</div></div>
           <div class="title">فاتورة بيع</div>
         </div>
         <div class="grid">
@@ -709,7 +729,7 @@ export default function RepDeliveryPage({ userId }: { userId: string }) {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label className="text-xs">رقم الهاتف</Label>
-                <Input value={saleForm.phone} onChange={e => setSaleForm(p => ({ ...p, phone: e.target.value }))} className="h-8 text-sm" />
+                <PhoneInput value={saleForm.phone} onValueChange={(v) => setSaleForm(p => ({ ...p, phone: v }))} className="h-8 text-sm" />
               </div>
               <div>
                 <Label className="text-xs">العنوان</Label>

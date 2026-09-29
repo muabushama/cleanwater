@@ -6,6 +6,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { joinWorkOrderPhoneFields } from '@/lib/workOrderPrintPhones';
+import { PhoneInput } from '@/components/PhoneInput';
+import { isCompletePhone11 } from '@/lib/phoneDigits';
 import { ProductSearchCombobox } from '@/components/inventory/ProductSearchCombobox';
 import { matchesLooseSearch, matchesAnyLooseSearch } from '@/lib/searchText';
 import { computeWarrantyStatus, findCustomerDevice, type WarrantyDeviceHint } from '@/lib/warrantyStatus';
@@ -170,6 +172,18 @@ export function WorkOrderAddDialog({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isCompletePhone11(form.phone)) {
+      window.alert('رقم الهاتف الأساسي يجب أن يكون 11 رقم');
+      return;
+    }
+    if (form.phone2 && !isCompletePhone11(form.phone2)) {
+      window.alert('الهاتف الإضافي يجب أن يكون 11 رقم أو يُترك فارغاً');
+      return;
+    }
+    if (form.phone3 && !isCompletePhone11(form.phone3)) {
+      window.alert('الهاتف الإضافي 2 يجب أن يكون 11 رقم أو يُترك فارغاً');
+      return;
+    }
     const lines = productLines
       .map((ln) => {
         const prod = products.find((p) => p.id === ln.product_id);
@@ -260,7 +274,7 @@ export function WorkOrderAddDialog({
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1.5">
                 <Label>الهاتف (أساسي)</Label>
-                <Input value={form.phone} onChange={e => setForm(p => ({ ...p, phone: e.target.value }))} required dir="ltr" className="text-left" />
+                <PhoneInput value={form.phone} onValueChange={(v) => setForm(p => ({ ...p, phone: v }))} required className="text-left" placeholder="11 رقم" />
               </div>
               <div className="space-y-1.5">
                 <Label>المنطقة</Label>
@@ -270,11 +284,11 @@ export function WorkOrderAddDialog({
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1.5">
                 <Label>هاتف إضافي (اختياري)</Label>
-                <Input value={form.phone2} onChange={e => setForm(p => ({ ...p, phone2: e.target.value }))} dir="ltr" className="text-left" placeholder="رقم ثانٍ" />
+                <PhoneInput value={form.phone2} onValueChange={(v) => setForm(p => ({ ...p, phone2: v }))} className="text-left" placeholder="رقم ثانٍ" />
               </div>
               <div className="space-y-1.5">
                 <Label>هاتف إضافي 2 (اختياري)</Label>
-                <Input value={form.phone3} onChange={e => setForm(p => ({ ...p, phone3: e.target.value }))} dir="ltr" className="text-left" placeholder="رقم ثالث / واتساب" />
+                <PhoneInput value={form.phone3} onValueChange={(v) => setForm(p => ({ ...p, phone3: v }))} className="text-left" placeholder="رقم ثالث / واتساب" />
               </div>
             </div>
           </div>

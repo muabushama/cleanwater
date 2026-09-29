@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { formatEGP, companyInfo } from '@/data/demo-data';
+import { PRINT_INK_CSS } from '@/lib/printInk';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -75,6 +76,7 @@ interface SupplierCard {
   due: number;
   credit: number;
   count: number;
+  technicians: string[];
 }
 
 const emptyLine = (): PurchaseLine => ({ product_id: '', product_name: '', quantity: '1', unit_price: '0' });
@@ -193,16 +195,18 @@ export default function PurchasesPage() {
   const supplierCards: SupplierCard[] = useMemo(() => {
     const map = new Map<string, SupplierCard>();
     uniqueSuppliers.forEach((name) => {
-      map.set(name, { name, total: 0, paid: 0, due: 0, credit: 0, count: 0 });
+      map.set(name, { name, total: 0, paid: 0, due: 0, credit: 0, count: 0, technicians: [] });
     });
     list.forEach((p) => {
       const name = (p.supplier_name || '').trim() || 'مورد بدون اسم';
-      const row = map.get(name) || { name, total: 0, paid: 0, due: 0, credit: 0, count: 0 };
+      const row = map.get(name) || { name, total: 0, paid: 0, due: 0, credit: 0, count: 0, technicians: [] };
       row.total += Number(p.total) || 0;
       row.paid += purchasePaid(p);
       row.due += purchaseDue(p);
       row.credit += purchaseCredit(p);
       row.count += 1;
+      const tech = String(p.rep_name || '').trim();
+      if (tech && !row.technicians.includes(tech)) row.technicians.push(tech);
       map.set(name, row);
     });
     return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name, 'ar'));
@@ -211,7 +215,9 @@ export default function PurchasesPage() {
   const filteredSupplierCards = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return supplierCards;
-    return supplierCards.filter((s) => s.name.toLowerCase().includes(q));
+    return supplierCards.filter((s) =>
+      s.name.toLowerCase().includes(q) || s.technicians.some((t) => t.toLowerCase().includes(q)),
+    );
   }, [supplierCards, search]);
 
   const globalStats = useMemo(() => {
@@ -231,7 +237,7 @@ export default function PurchasesPage() {
 
   const detailStats = useMemo(() => {
     const card = supplierCards.find((c) => c.name === detailSupplier);
-    return card || { name: detailSupplier || '', total: 0, paid: 0, due: 0, credit: 0, count: 0 };
+    return card || { name: detailSupplier || '', total: 0, paid: 0, due: 0, credit: 0, count: 0, technicians: [] };
   }, [supplierCards, detailSupplier]);
 
   const fetchData = async () => {
@@ -453,16 +459,16 @@ export default function PurchasesPage() {
     if (!w) return;
     w.document.write(`
       <html dir="rtl"><head><title>فاتورة مشتريات ${p.purchase_number}</title>
-      <style>body{font-family:Cairo,sans-serif;padding:20px;} table{border-collapse:collapse;width:100%;} th,td{border:1px solid #ddd;padding:8px;text-align:right;}</style></head><body>
+      <style>${PRINT_INK_CSS}body{font-family:Cairo,sans-serif;padding:20px;} table{border-collapse:collapse;width:100%;} th,td{border:1px solid #000;padding:8px;text-align:right;}</style></head><body>
       <h1>فاتورة مشتريات ${p.purchase_number}</h1>
-      <p>التاريخ: ${formatDateDisplay(p.purchase_date)} | المورد: ${p.supplier_name}</p>
+      <p>التاريخ: ${formatDateDisplay(p.purchase_date)} | المورد: ${p.supplier_name}${p.rep_name ? ` | الفني: ${p.rep_name}` : ''}</p>
       <table>
         <tr><th>المنتج</th><th>الكمية</th><th>سعر الوحدة</th><th>الإجمالي</th></tr>
         ${itemLines.map((ln) => `<tr><td>${ln.product_name}</td><td>${ln.quantity}</td><td>${formatEGP(Number(ln.unit_price))}</td><td>${formatEGP(lineTotal(ln))}</td></tr>`).join('')}
       </table>
       <p>الإجمالي: ${formatEGP(p.total)} | المسدد: ${formatEGP(p.paid || 0)} | المستحق: ${formatEGP(p.remaining ?? Math.max(0, (p.total || 0) - (p.paid || 0)))}</p>
       ${p.notes ? `<p>ملاحظات: ${p.notes}</p>` : ''}
-      <p style="margin-top:30px;font-size:12px;color:#666">${companyInfo.branches.join(' | ')}</p>
+      <p style="margin-top:30px;font-size:12px">${companyInfo.branches.join(' | ')}</p>
       </body></html>
     `);
     w.document.close();
@@ -489,6 +495,7 @@ export default function PurchasesPage() {
                 <Badge variant="outline" className="text-xs">مشتريات</Badge>
               </div>
               <p className="text-sm">{itemLines.length > 1 ? `${itemLines.length} منتجات` : p.product_name}</p>
+              {p.rep_name && <p className="text-xs font-bold text-black mt-0.5">الفني: {p.rep_name}</p>}
               <p className="text-xs text-muted-foreground">{formatDateDisplay(p.purchase_date)} | الكمية: {p.quantity}</p>
               <div className="flex flex-wrap gap-2 mt-2">
                 <Badge variant="secondary" className="gap-1 text-[10px]"><Wallet className="h-3 w-3" /> إجمالي: {formatEGP(p.total)}</Badge>
@@ -565,7 +572,7 @@ export default function PurchasesPage() {
 
       <div className="relative max-w-sm">
         <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input placeholder="بحث باسم المورد..." value={search} onChange={(e) => setSearch(e.target.value)} className="pr-9" />
+        <Input placeholder="بحث باسم المورد أو الفني..." value={search} onChange={(e) => setSearch(e.target.value)} className="pr-9" />
       </div>
 
       {loading ? (
@@ -586,6 +593,9 @@ export default function PurchasesPage() {
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
                 <p className="text-xs text-muted-foreground">{s.count} فاتورة مشتريات</p>
+                {s.technicians.length > 0 && (
+                  <p className="text-xs font-bold text-black">الفني: {s.technicians.join('، ')}</p>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   <div className="rounded-md bg-muted/40 p-2">
                     <p className="text-[10px] text-muted-foreground">إجمالي المشتريات</p>

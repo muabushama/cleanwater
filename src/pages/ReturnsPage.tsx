@@ -24,6 +24,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useUserBranch } from '@/hooks/useUserBranch';
 import { branchDbValuesForUiBranch } from '@/lib/branchFilters';
 import { promptDeletePassword } from '@/lib/deletePassword';
+import { PhoneInput } from '@/components/PhoneInput';
 interface ReturnRecord {
   id: string;
   return_number: string;
@@ -288,7 +289,7 @@ export default function ReturnsPage() {
       <p>التاريخ: ${formatDateDisplay(r.return_date)} | العميل: ${r.customer_name}</p>
       <p>المنتج: ${r.product_name} | الكمية: ${r.quantity} | المبلغ: ${formatEGP(r.amount)}</p>
       ${r.notes ? `<p>ملاحظات: ${r.notes}</p>` : ''}
-      <p style="margin-top:30px;font-size:12px;color:#666">${companyInfo.branches.join(' | ')}</p>
+      <p style="margin-top:30px;font-size:12px;color:#000;font-weight:700">${companyInfo.branches.join(' | ')}</p>
       </body></html>
     `);
     w.document.close();
@@ -399,7 +400,7 @@ export default function ReturnsPage() {
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <Label>هاتف المورد</Label>
-                    <Input value={form.supplier_phone} onChange={e => setForm(f => ({ ...f, supplier_phone: e.target.value }))} placeholder="رقم الهاتف" />
+                    <PhoneInput value={form.supplier_phone} onValueChange={(v) => setForm(f => ({ ...f, supplier_phone: v }))} placeholder="11 رقم" />
                   </div>
                   <div>
                     <Label>سبب الإرجاع</Label>

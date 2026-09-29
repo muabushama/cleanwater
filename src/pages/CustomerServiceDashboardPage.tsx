@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Users, FileText, Wrench, ClipboardList, PhoneCall, Clock3 } from 'lucide-react';
+import { Users, FileText, Wrench, ClipboardList, PhoneCall, Clock3, CalendarCheck } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { supabase } from '@/integrations/supabase/client';
 import { useUserBranch } from '@/hooks/useUserBranch';
 import { branchDbValuesForUiBranch } from '@/lib/branchFilters';
 import { formatEGP } from '@/data/demo-data';
 import { invoiceCustomerCredit, invoiceDebtRemaining } from '@/lib/invoiceBalance';
+import { useNavigate } from 'react-router-dom';
 
 const formatDateDisplay = (v: any) => { const s = String(v || ''); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : s; };
 
@@ -18,6 +20,7 @@ type WorkOrder = { id: string; customer_name: string; order_code: string; visit_
 
 export default function CustomerServiceDashboardPage() {
   const { branch } = useUserBranch();
+  const navigate = useNavigate();
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [maintenance, setMaintenance] = useState<Maintenance[]>([]);
@@ -64,6 +67,14 @@ export default function CustomerServiceDashboardPage() {
       <div>
         <h1 className="text-2xl font-bold">لوحة خدمة العملاء</h1>
         <p className="text-muted-foreground text-sm">ملخص سريع للمتابعة اليومية في {branch}</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button className="gap-2" onClick={() => navigate('/visits')}>
+          <CalendarCheck className="h-4 w-4" /> الزيارات
+        </Button>
+        <Button variant="outline" className="gap-2" onClick={() => navigate('/work-orders')}>
+          <ClipboardList className="h-4 w-4" /> أوامر العمل
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">

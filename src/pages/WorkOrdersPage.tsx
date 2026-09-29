@@ -17,6 +17,7 @@ import { useUserBranch } from '@/hooks/useUserBranch';
 import { branchDbValuesForUiBranch, canonicalBranchForSave } from '@/lib/branchFilters';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { formatDateDayMonthYear } from '@/lib/dateDisplay';
+import { PRINT_INK_CSS } from '@/lib/printInk';
 import { promptDeletePassword } from '@/lib/deletePassword';
 import { matchesAnyLooseSearch } from '@/lib/searchText';
 import { computeWarrantyStatus, findCustomerDevice, resolveWorkOrderWarranty, type WarrantyDeviceHint } from '@/lib/warrantyStatus';
@@ -180,6 +181,7 @@ function WorkOrderDetail({
     }
     const logoSrc = printAssetUrl(typeof logo === 'string' ? logo : String(logo));
     const tableRows = (Array.isArray(wo.items) ? wo.items : [])
+      .filter((item) => !/^المنتج\s*:/i.test(String(item.description || '').trim()))
       .map(
         (item) =>
           `<tr><td class="c1">${escapeHtml(item.description || '-')}</td><td class="c2">${escapeHtml(formatEGP(Number(item.value) || 0))}</td></tr>`,
@@ -199,13 +201,13 @@ function WorkOrderDetail({
           </div>
           <div class="title-wrap">
             <div class="title">أمر شغل</div>
-            <div class="code">كود العميل: ${escapeHtml(orderCodeLabel)}</div>
+            <div class="code">الكود: ${escapeHtml(orderCodeLabel)}</div>
           </div>
         </div>
         <table class="meta"><tbody>
           <tr><td><b>اسم العميل:</b> ${escapeHtml(wo.customer_name || '-')}</td><td class="phone-cell" dir="ltr"><b>التليفون:</b> ${escapeHtml(displayPhones)}</td><td><b>التاريخ:</b> ${escapeHtml(formatDateDisplay(wo.visit_date))}</td></tr>
           <tr><td><b>العنوان:</b> ${escapeHtml(wo.address || '-')}</td><td><b>المنطقة:</b> ${escapeHtml(wo.region || '-')}</td><td><b>الفني:</b> ${escapeHtml(wo.technician || '-')}</td></tr>
-          <tr><td><b>المنتج:</b> ${escapeHtml(wo.product_name || '-')}</td><td><b>حالة الضمان:</b> ${escapeHtml(warrantyLabel)}</td><td><b>لينك الموقع:</b> ${escapeHtml(wo.location_url || '-')}</td></tr>
+          <tr><td><b>حالة الضمان:</b> ${escapeHtml(warrantyLabel)}</td><td><b>لينك الموقع:</b> ${escapeHtml(wo.location_url || '-')}</td><td></td></tr>
         </tbody></table>
         <table class="items"><thead><tr><th>البيان</th><th>القيمة</th></tr></thead><tbody>
           ${tableRows}
@@ -228,6 +230,7 @@ function WorkOrderDetail({
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
         * { box-sizing: border-box; font-family: Cairo, Tahoma, sans-serif; }
+        ${PRINT_INK_CSS}
         body { margin: 0; padding: 6px; color: #000; font-weight: 600; font-size: 15px; }
         .wo-copy { height: calc(50vh - 7mm); overflow: hidden; display: flex; align-items: flex-start; justify-content: center; }
         .work-form { width: 100%; border: 2px solid #000; padding: 10px; transform: scale(0.92); transform-origin: top center; }
@@ -278,7 +281,7 @@ function WorkOrderDetail({
         </div>
         <div className="text-center">
           <div className="border-2 border-black px-6 py-1 text-lg font-bold">أمر شغل</div>
-          <div className="text-[10px] mt-1">كود العميل: {orderCodeLabel}</div>
+          <div className="text-[10px] mt-1 font-extrabold text-black">الكود: {orderCodeLabel}</div>
         </div>
         <Button variant="ghost" size="icon" onClick={onClose} className="print:hidden shrink-0"><X className="h-4 w-4" /></Button>
       </div>
@@ -295,9 +298,9 @@ function WorkOrderDetail({
           <div className="p-1.5"><span className="font-semibold">الفني:</span> {wo.technician || '-'}</div>
         </div>
         <div className="grid grid-cols-3 border-t border-black">
-          <div className="p-1.5 border-l border-black"><span className="font-semibold">المنتج:</span> {wo.product_name || '-'}</div>
           <div className="p-1.5 border-l border-black"><span className="font-semibold">حالة الضمان:</span> {warrantyLabel}</div>
-          <div className="p-1.5"><span className="font-semibold">لينك الموقع:</span> {wo.location_url || '-'}</div>
+          <div className="p-1.5 border-l border-black"><span className="font-semibold">لينك الموقع:</span> {wo.location_url || '-'}</div>
+          <div className="p-1.5"></div>
         </div>
       </div>
 
@@ -309,7 +312,7 @@ function WorkOrderDetail({
           </tr>
         </thead>
         <tbody>
-          {wo.items.map((item, i) => (
+          {wo.items.filter((item) => !/^المنتج\s*:/i.test(String(item.description || '').trim())).map((item, i) => (
             <tr key={i}>
               <td className="border border-black p-1.5">{item.description}</td>
               <td className="border border-black p-1.5 text-center font-medium">{formatEGP(Number(item.value) || 0)}</td>
