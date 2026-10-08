@@ -13,12 +13,12 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useToast } from '@/hooks/use-toast';
 import { formatEGP, companyInfo } from '@/data/demo-data';
-import { PRINT_INK_CSS } from '@/lib/printInk';
 import { PhoneInput } from '@/components/PhoneInput';
 import { isCompletePhone11 } from '@/lib/phoneDigits';
 import { invoiceDebtRemaining } from '@/lib/invoiceBalance';
 import { promptDeletePassword } from '@/lib/deletePassword';
 import { workOrderPhonesForPrint } from '@/lib/workOrderPrintPhones';
+import { buildWorkOrderPrintHtml, printAssetUrl, printHtmlDocument } from '@/lib/printWorkOrder';
 import { resolveWorkOrderWarranty } from '@/lib/warrantyStatus';
 import {
   getMaintenanceIntervalMonths,
@@ -594,89 +594,32 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
 
   const handlePrintWorkOrder = (wo: any) => {
     const items = Array.isArray(wo.items) ? wo.items : [];
-    const total = Number(wo.total) || items.reduce((s: number, it: any) => s + (Number(it.value) || Number(it.unit_price) || 0) * (Number(it.qty) || 1), 0);
+    const itemsSum = items.reduce((s: number, it: any) => s + (Number(it.value) || Number(it.unit_price) || 0), 0);
     const transport = Number(wo.transport_cost) || 0;
+    const total = (Number(wo.total) || 0) > 0 ? Number(wo.total) : itemsSum + transport;
     const allPhones = workOrderPhonesForPrint(
       { phone: wo.phone, customer_name: wo.customer_name },
       customers.map(c => ({ name: c.name, phone1: c.phone1, phone2: c.phone2, whatsapp: c.whatsapp })),
     );
     const warrantyLabel = resolveWorkOrderWarranty(wo, devices);
     const orderCodeLabel = wo.customer_code || wo.order_code || '-';
-    const html = `<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"><title>أمر عمل ${orderCodeLabel}</title>
-    <style>
-      @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap');
-      * { margin:0; padding:0; box-sizing:border-box; font-family:'Cairo',sans-serif; }
-      ${PRINT_INK_CSS}
-      body { padding:20px; color:#000; font-size:15px; font-weight:800; }
-      .container { max-width:800px; margin:0 auto; border:2px solid #000; padding:25px; }
-      .top-address { text-align:center; font-size:13px; font-weight:800; color:#000; margin-bottom:8px; line-height:1.6; border-bottom:2px solid #000; padding-bottom:8px; }
-      .header { display:flex; justify-content:space-between; align-items:center; padding-bottom:12px; margin-bottom:18px; border-bottom:2px solid #000; }
-      .header-logo img { max-height:200px; max-width:380px; object-fit:contain; }
-      .header-info { text-align:left; }
-      .code { font-size:14px; color:#000; font-weight:800; }
-      .info { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:18px; font-size:13px; }
-      .info-item { background:#f8f9fa; padding:8px 10px; border-radius:4px; border:1px solid #ddd; }
-      .info-label { color:#000; font-size:12px; font-weight:800; }
-      .info-value { font-weight:900; font-size:15px; color:#000; }
-      table { width:100%; border-collapse:collapse; margin:14px 0; }
-      th { background:#111; color:#fff; padding:10px; font-size:14px; text-align:right; font-weight:800; }
-      td { padding:10px; border:1px solid #333; font-size:14px; font-weight:800; color:#000; }
-      .total-row { background:#f0f4f8; font-weight:800; font-size:16px; }
-      .sigs { display:grid; grid-template-columns:1fr 1fr; gap:30px; text-align:center; margin-top:30px; font-size:13px; color:#000; }
-      .sig-line { border-top:2px solid #000; margin-top:40px; padding-top:5px; font-weight:700; }
-      .footer { margin-top:18px; padding-top:12px; border-top:3px solid #000; font-size:13px; color:#000; text-align:center; line-height:2; font-weight:700; }
-      .footer p { margin:3px 0; }
-      .footer .branch { font-weight:800; font-size:14px; color:#000; background:#f0f4f8; padding:4px 10px; border-radius:4px; display:inline-block; margin:2px 0; }
-      .footer .phones { font-weight:700; font-size:13px; }
-      .footer .hotline { font-weight:800; font-size:15px; color:#000; }
-      @media print { body { padding:10px; } }
-    </style></head><body>
-    <div class="container">
-      <div class="top-address">
-        ${companyInfo.branches[0]} | ${companyInfo.branches[1]}
-      </div>
-      <div class="header">
-        <div class="header-logo"><img src="${logo}" alt="Clean Water Logo" /></div>
-        <div class="header-info"><div class="code">الكود: ${orderCodeLabel}</div><div style="font-size:11px;color:#000;font-weight:700;margin-top:2px">أمر عمل</div></div>
-      </div>
-      <div class="info">
-        <div class="info-item"><span class="info-label">العميل:</span><div class="info-value">${wo.customer_name || '-'}</div></div>
-        <div class="info-item"><span class="info-label">الهاتف:</span><div class="info-value">${allPhones}</div></div>
-        <div class="info-item"><span class="info-label">التاريخ:</span><div class="info-value">${formatDateDisplay(wo.visit_date)}</div></div>
-        <div class="info-item"><span class="info-label">العنوان:</span><div class="info-value">${wo.address || '-'}</div></div>
-        <div class="info-item"><span class="info-label">المنطقة:</span><div class="info-value">${wo.region || '-'}</div></div>
-        <div class="info-item"><span class="info-label">الفني:</span><div class="info-value">${wo.technician || '-'}</div></div>
-        <div class="info-item"><span class="info-label">الحالة:</span><div class="info-value">${wo.status || '-'}</div></div>
-        <div class="info-item"><span class="info-label">حالة الضمان:</span><div class="info-value">${warrantyLabel}</div></div>
-      </div>
-      ${items.length > 0 ? `
-        <table>
-          <thead><tr><th>#</th><th>المنتج / البيان</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead>
-          <tbody>${items.filter((it: any) => !/^المنتج\s*:/i.test(String(it.description || it.product_name || '').trim())).map((it: any, idx: number) => {
-            const desc = it.description || it.product_name || '-';
-            const qty = Number(it.qty) || 1;
-            const price = Number(it.value) || Number(it.unit_price) || 0;
-            return `<tr><td style="text-align:center">${idx + 1}</td><td>${desc}</td><td style="text-align:center">${qty}</td><td style="text-align:center">${price}</td><td style="text-align:center;font-weight:700">${qty * price}</td></tr>`;
-          }).join('')}
-          ${transport > 0 ? `<tr><td colspan="4" style="text-align:left;font-weight:700">مواصلات</td><td style="text-align:center;font-weight:700">${transport}</td></tr>` : ''}
-          <tr class="total-row"><td colspan="4" style="text-align:left">الإجمالي</td><td style="text-align:center;font-size:18px;font-weight:800">${total + transport} ج.م</td></tr>
-          </tbody>
-        </table>
-      ` : `<p style="text-align:center;padding:20px;color:#000;font-weight:700">لا توجد بنود</p>`}
-      ${wo.notes ? `<div style="background:#f8f9fa;padding:10px;border-radius:4px;margin:12px 0;font-size:13px;font-weight:600"><b>ملاحظات:</b> ${wo.notes}</div>` : ''}
-      <div class="sigs">
-        <div><div style="font-weight:800;font-size:14px;margin-bottom:40px">توقيع العميل</div><div class="sig-line">التوقيع والاسم</div></div>
-        <div><div style="font-weight:800;font-size:14px;margin-bottom:40px">توقيع الفني / المندوب</div><div class="sig-line">التوقيع والاسم</div></div>
-      </div>
-      <div class="footer">
-        <p class="branch">🏢 ${companyInfo.branches[0]}</p>
-        <p class="branch">🏢 ${companyInfo.branches[1]}</p>
-        <p class="phones">خدمة العملاء: ${companyInfo.customerService.join(' - ')}</p>
-        <p class="hotline">📞 الخط الساخن: ${companyInfo.hotline} | إدارة الفنيين: ${companyInfo.techManagement}</p>
-      </div>
-    </div></body></html>`;
-    const w = window.open('', '_blank');
-    if (w) { w.document.write(html); w.document.close(); setTimeout(() => w.print(), 500); }
+    const html = buildWorkOrderPrintHtml({
+      orderCodeLabel,
+      customerName: wo.customer_name || '',
+      phones: allPhones,
+      visitDate: formatDateDisplay(wo.visit_date),
+      address: wo.address || '',
+      region: wo.region || '',
+      technician: wo.technician || '',
+      warrantyLabel,
+      locationUrl: wo.location_url || '',
+      notes: wo.notes || '',
+      items,
+      transportCost: transport,
+      total,
+      logoSrc: printAssetUrl(typeof logo === 'string' ? logo : String(logo)),
+    });
+    printHtmlDocument(html);
   };
 
   const handleSaveMaintenance = async () => {

@@ -17,7 +17,7 @@ import { useUserBranch } from '@/hooks/useUserBranch';
 import { branchDbValuesForUiBranch, canonicalBranchForSave } from '@/lib/branchFilters';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { formatDateDayMonthYear } from '@/lib/dateDisplay';
-import { PRINT_INK_CSS } from '@/lib/printInk';
+import { buildWorkOrderPrintHtml, formatWorkOrderPrintPrice, printAssetUrl, printHtmlDocument } from '@/lib/printWorkOrder';
 import { promptDeletePassword } from '@/lib/deletePassword';
 import { matchesAnyLooseSearch } from '@/lib/searchText';
 import { computeWarrantyStatus, findCustomerDevice, resolveWorkOrderWarranty, type WarrantyDeviceHint } from '@/lib/warrantyStatus';
@@ -53,22 +53,6 @@ interface WorkOrder {
 const formatDateDisplay = (v: any) => formatDateDayMonthYear(v);
 
 const ensureHttpUrl = (url: string) => (/^https?:\/\//i.test(url) ? url : `https://${url}`);
-
-const escapeHtml = (s: string) =>
-  String(s || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-
-const printAssetUrl = (asset: string) => {
-  const u = String(asset || '');
-  if (!u) return u;
-  if (u.startsWith('http://') || u.startsWith('https://') || u.startsWith('data:')) return u;
-  if (u.startsWith('/')) return `${window.location.origin}${u}`;
-  return u;
-};
 
 const openExternalLink = (url: string) => {
   const newWindow = window.open(url, '_blank', 'noopener,noreferrer');
@@ -174,96 +158,23 @@ function WorkOrderDetail({
   const warrantyLabel = resolveWorkOrderWarranty(wo, devices, matchedCustomer?.id);
   const orderCodeLabel = wo.customer_code || wo.order_code || '-';
   const handlePrint = () => {
-    const w = window.open('', '_blank');
-    if (!w) {
-      window.print();
-      return;
-    }
-    const logoSrc = printAssetUrl(typeof logo === 'string' ? logo : String(logo));
-    const tableRows = (Array.isArray(wo.items) ? wo.items : [])
-      .filter((item) => !/^المنتج\s*:/i.test(String(item.description || '').trim()))
-      .map(
-        (item) =>
-          `<tr><td class="c1">${escapeHtml(item.description || '-')}</td><td class="c2">${escapeHtml(formatEGP(Number(item.value) || 0))}</td></tr>`,
-      )
-      .join('');
-    const transportCost = Number(wo.transport_cost) || 0;
-    const sheet = `
-      <div class="work-form">
-        <div class="head">
-          <div class="logo-wrap">
-            <img src="${escapeHtml(logoSrc)}" alt="logo" />
-            <div class="small">
-              <div class="brand">كلين ووتر</div>
-              <div>لتكنولوجيا معالجة مياه الشرب</div>
-              <div>خدمة العملاء: ${escapeHtml(companyInfo.customerService.join(' - '))}</div>
-            </div>
-          </div>
-          <div class="title-wrap">
-            <div class="title">أمر شغل</div>
-            <div class="code">الكود: ${escapeHtml(orderCodeLabel)}</div>
-          </div>
-        </div>
-        <table class="meta"><tbody>
-          <tr><td><b>اسم العميل:</b> ${escapeHtml(wo.customer_name || '-')}</td><td class="phone-cell" dir="ltr"><b>التليفون:</b> ${escapeHtml(displayPhones)}</td><td><b>التاريخ:</b> ${escapeHtml(formatDateDisplay(wo.visit_date))}</td></tr>
-          <tr><td><b>العنوان:</b> ${escapeHtml(wo.address || '-')}</td><td><b>المنطقة:</b> ${escapeHtml(wo.region || '-')}</td><td><b>الفني:</b> ${escapeHtml(wo.technician || '-')}</td></tr>
-          <tr><td><b>حالة الضمان:</b> ${escapeHtml(warrantyLabel)}</td><td><b>لينك الموقع:</b> ${escapeHtml(wo.location_url || '-')}</td><td></td></tr>
-        </tbody></table>
-        <table class="items"><thead><tr><th>البيان</th><th>القيمة</th></tr></thead><tbody>
-          ${tableRows}
-          ${transportCost > 0 ? `<tr><td class="c1"><b>مواصلات</b></td><td class="c2">${escapeHtml(formatEGP(transportCost))}</td></tr>` : ''}
-          <tr><td class="c1"><b>الإجمالي</b></td><td class="c2"><b>${escapeHtml(formatEGP(computedTotal))}</b></td></tr>
-        </tbody></table>
-        <div class="notes"><b>ملاحظات:</b> ${escapeHtml(wo.notes || '-')}</div>
-        <div class="signs">
-          <div><p>خدمة العملاء</p><span>التوقيع</span></div>
-          <div><p>توقيع العميل</p><span>التوقيع</span></div>
-          <div><p>توقيع الفني</p><span>التوقيع</span></div>
-        </div>
-        <div class="foot">
-          <p>${escapeHtml(companyInfo.branches.join(' | '))}</p>
-          <p>خدمة العملاء: ${escapeHtml(companyInfo.customerService.join(' - '))}</p>
-          <p>الخط الساخن: ${escapeHtml(companyInfo.hotline)} | إدارة الفنيين: ${escapeHtml(companyInfo.techManagement)}</p>
-        </div>
-      </div>`;
-    w.document.write(`<!DOCTYPE html><html dir="rtl"><head><meta charset="utf-8"/><title>أمر شغل ${escapeHtml(orderCodeLabel)}</title>
-      <style>
-        @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
-        * { box-sizing: border-box; font-family: Cairo, Tahoma, sans-serif; }
-        ${PRINT_INK_CSS}
-        body { margin: 0; padding: 6px; color: #000; font-weight: 600; font-size: 15px; }
-        .wo-copy { height: calc(50vh - 7mm); overflow: hidden; display: flex; align-items: flex-start; justify-content: center; }
-        .work-form { width: 100%; border: 2px solid #000; padding: 10px; transform: scale(0.92); transform-origin: top center; }
-        .head { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; }
-        .logo-wrap { display:flex; align-items:center; gap:12px; }
-        .logo-wrap img { width: 88px; height: 88px; border: 2px solid #000; padding: 3px; object-fit: contain; }
-        .small { font-size: 14px; line-height: 1.5; font-weight: 700; color: #000; }
-        .brand { font-size: 20px; font-weight: 900; line-height: 1.15; color: #000; }
-        .title-wrap { text-align:center; }
-        .title { border:2px solid #000; padding:4px 24px; font-size:26px; font-weight:900; color: #000; }
-        .code { font-size: 15px; margin-top:4px; font-weight: 800; color: #000; }
-        table { width:100%; border-collapse:collapse; font-size: 15px; font-weight: 700; color: #000; }
-        .meta td, .items td, .items th { border:1px solid #000; padding:6px 10px; }
-        .meta .phone-cell { font-size: 16px; font-weight: 800; letter-spacing: 0.02em; unicode-bidi: plaintext; white-space: normal; word-break: break-word; }
-        .items th { font-weight:700; text-align:right; }
-        .items .c2 { width:120px; text-align:center; }
-        .notes { border:1px solid #000; margin-top:5px; padding:6px 10px; font-size: 14px; min-height:28px; }
-        .signs { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; text-align:center; margin-top:8px; font-size:13px; }
-        .signs p { margin:0 0 22px; font-weight:600; }
-        .signs span { display:block; border-top:1px dashed #000; padding-top:3px; }
-        .foot { border-top:1px solid #000; margin-top:6px; padding-top:4px; text-align:center; font-size:11px; line-height:1.45; }
-        .copy-separator { border: none; border-top: 2px dashed #999; margin: 6px 0; }
-        @media print { @page { margin: 8mm; } body { padding: 0; } .wo-copy { page-break-inside: avoid; } }
-      </style></head><body>
-      <div class="wo-copy">${sheet}</div>
-      <hr class="copy-separator" />
-      <div class="wo-copy">${sheet}</div>
-      </body></html>`);
-    w.document.close();
-    setTimeout(() => {
-      w.print();
-      w.close();
-    }, 300);
+    const html = buildWorkOrderPrintHtml({
+      orderCodeLabel,
+      customerName: wo.customer_name || '',
+      phones: displayPhones,
+      visitDate: formatDateDisplay(wo.visit_date),
+      address: wo.address || '',
+      region: wo.region || '',
+      technician: wo.technician || '',
+      warrantyLabel,
+      locationUrl: wo.location_url || '',
+      notes: wo.notes || '',
+      items: Array.isArray(wo.items) ? wo.items : [],
+      transportCost: Number(wo.transport_cost) || 0,
+      total: computedTotal,
+      logoSrc: printAssetUrl(typeof logo === 'string' ? logo : String(logo)),
+    });
+    printHtmlDocument(html);
   };
 
   return (
@@ -312,16 +223,20 @@ function WorkOrderDetail({
           </tr>
         </thead>
         <tbody>
-          {wo.items.filter((item) => !/^المنتج\s*:/i.test(String(item.description || '').trim())).map((item, i) => (
-            <tr key={i}>
-              <td className="border border-black p-1.5">{item.description}</td>
-              <td className="border border-black p-1.5 text-center font-medium">{formatEGP(Number(item.value) || 0)}</td>
-            </tr>
-          ))}
+          {(Array.isArray(wo.items) ? wo.items : []).map((item, i) => {
+            const raw = String(item.description || '').trim();
+            const isProduct = /^المنتج\s*:/i.test(raw);
+            return (
+              <tr key={i}>
+                <td className="border border-black p-1.5">{isProduct ? '—' : (raw || '—')}</td>
+                <td className="border border-black p-1.5 text-center font-medium" dir="ltr">{formatWorkOrderPrintPrice(Number(item.value) || 0)}</td>
+              </tr>
+            );
+          })}
           {(Number(wo.transport_cost) || 0) > 0 && (
-            <tr><td className="border border-black p-1.5 font-semibold">مواصلات</td><td className="border border-black p-1.5 text-center">{formatEGP(Number(wo.transport_cost) || 0)}</td></tr>
+            <tr><td className="border border-black p-1.5 font-semibold">مواصلات</td><td className="border border-black p-1.5 text-center" dir="ltr">{formatWorkOrderPrintPrice(Number(wo.transport_cost) || 0)}</td></tr>
           )}
-          <tr><td className="border border-black p-1.5 font-bold">الإجمالي</td><td className="border border-black p-1.5 text-center font-bold">{formatEGP(computedTotal)}</td></tr>
+          <tr><td className="border border-black p-1.5 font-bold">الإجمالي</td><td className="border border-black p-1.5 text-center font-bold" dir="ltr">{formatWorkOrderPrintPrice(computedTotal)}</td></tr>
         </tbody>
       </table>
 
