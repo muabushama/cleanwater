@@ -17,7 +17,7 @@ import { useUserBranch } from '@/hooks/useUserBranch';
 import { branchDbValuesForUiBranch, canonicalBranchForSave } from '@/lib/branchFilters';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { formatDateDayMonthYear } from '@/lib/dateDisplay';
-import { buildWorkOrderPrintHtml, formatWorkOrderPrintPrice, printAssetUrl, printHtmlDocument } from '@/lib/printWorkOrder';
+import { buildWorkOrderPrintHtml, formatWorkOrderPrintPrice, parseWorkOrderItems, printAssetUrl, printHtmlDocument, resolveWorkOrderPrintItems } from '@/lib/printWorkOrder';
 import { promptDeletePassword } from '@/lib/deletePassword';
 import { matchesAnyLooseSearch } from '@/lib/searchText';
 import { computeWarrantyStatus, findCustomerDevice, resolveWorkOrderWarranty, type WarrantyDeviceHint } from '@/lib/warrantyStatus';
@@ -123,13 +123,16 @@ const productLinesUnchanged = (a: ProductLine[], b: ProductLine[]) => {
   return sigA === sigB;
 };
 
-const computeWorkOrderTotal = (wo: WorkOrder) => {
-  const saved = Number(wo.total) || 0;
-  if (saved > 0) return saved;
-  const transport = Number(wo.transport_cost) || 0;
-  const itemsSum = (Array.isArray(wo.items) ? wo.items : []).reduce((s, i) => s + (Number(i.value) || 0), 0);
-  return transport + itemsSum;
-};
+const computeWorkOrderTotal = (wo: WorkOrder) =>
+  resolveWorkOrderPrintItems({
+    items: wo.items,
+    productName: wo.product_name,
+    price1: (wo as any).price1,
+    price2: (wo as any).price2,
+    price3: (wo as any).price3,
+    total: wo.total,
+    transportCost: wo.transport_cost,
+  }).total;
 
 const extractProductNameFromItemDescription = (description?: string): string => {
   const d = String(description || '').trim();
@@ -169,7 +172,11 @@ function WorkOrderDetail({
       warrantyLabel,
       locationUrl: wo.location_url || '',
       notes: wo.notes || '',
-      items: Array.isArray(wo.items) ? wo.items : [],
+      items: wo.items,
+      productName: wo.product_name,
+      price1: (wo as any).price1,
+      price2: (wo as any).price2,
+      price3: (wo as any).price3,
       transportCost: Number(wo.transport_cost) || 0,
       total: computedTotal,
       logoSrc: printAssetUrl(typeof logo === 'string' ? logo : String(logo)),
@@ -223,13 +230,22 @@ function WorkOrderDetail({
           </tr>
         </thead>
         <tbody>
-          {(Array.isArray(wo.items) ? wo.items : []).map((item, i) => {
-            const raw = String(item.description || '').trim();
+          {resolveWorkOrderPrintItems({
+            items: wo.items,
+            productName: wo.product_name,
+            price1: (wo as any).price1,
+            price2: (wo as any).price2,
+            price3: (wo as any).price3,
+            total: wo.total,
+            transportCost: wo.transport_cost,
+          }).rows.map((item, i) => {
+            const raw = String(item.description || item.product_name || '').trim();
             const isProduct = /^المنتج\s*:/i.test(raw);
+            const amount = Number(item.value) || Number(item.line_total) || Number(item.unit_price) || 0;
             return (
               <tr key={i}>
                 <td className="border border-black p-1.5">{isProduct ? '—' : (raw || '—')}</td>
-                <td className="border border-black p-1.5 text-center font-medium" dir="ltr">{formatWorkOrderPrintPrice(Number(item.value) || 0)}</td>
+                <td className="border border-black p-1.5 text-center font-medium" dir="ltr">{formatWorkOrderPrintPrice(amount)}</td>
               </tr>
             );
           })}
@@ -348,8 +364,8 @@ export default function WorkOrdersPage({ embedded, customerNameFilter, strictEmp
     if (data && data.length > 0) {
       setWorkOrders(data.map((wo: any) => ({
         ...wo,
-        items: Array.isArray(wo.items) ? wo.items : [],
-        previous_visits: Array.isArray(wo.previous_visits) ? wo.previous_visits : [],
+        items: parseWorkOrderItems(wo.items),
+        previous_visits: parseWorkOrderItems(wo.previous_visits),
       })) as WorkOrder[]);
     } else {
       setWorkOrders(demoWorkOrders.map(wo => ({

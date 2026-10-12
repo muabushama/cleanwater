@@ -586,7 +586,15 @@ function parseTableRow(string $table, array $row, array $jsonFields, array $defa
 
         if (is_string($value)) {
             $decoded = json_decode($value, true);
+            if (is_string($decoded)) {
+                $decoded = json_decode($decoded, true);
+            }
+            if (is_array($decoded) && array_key_exists('description', $decoded) && !array_key_exists(0, $decoded)) {
+                $decoded = [$decoded];
+            }
             $row[$field] = is_array($decoded) ? $decoded : ($field === 'candles' ? $defaultCandles : []);
+        } elseif (is_array($value) && array_key_exists('description', $value) && !array_key_exists(0, $value)) {
+            $row[$field] = [$value];
         }
     }
 

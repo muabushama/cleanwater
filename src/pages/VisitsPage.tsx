@@ -593,10 +593,7 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
   };
 
   const handlePrintWorkOrder = (wo: any) => {
-    const items = Array.isArray(wo.items) ? wo.items : [];
-    const itemsSum = items.reduce((s: number, it: any) => s + (Number(it.value) || Number(it.unit_price) || 0), 0);
     const transport = Number(wo.transport_cost) || 0;
-    const total = (Number(wo.total) || 0) > 0 ? Number(wo.total) : itemsSum + transport;
     const allPhones = workOrderPhonesForPrint(
       { phone: wo.phone, customer_name: wo.customer_name },
       customers.map(c => ({ name: c.name, phone1: c.phone1, phone2: c.phone2, whatsapp: c.whatsapp })),
@@ -614,9 +611,13 @@ export default function VisitsPage({ embedded }: VisitsPageProps = {}) {
       warrantyLabel,
       locationUrl: wo.location_url || '',
       notes: wo.notes || '',
-      items,
+      items: wo.items,
+      productName: wo.product_name,
+      price1: wo.price1,
+      price2: wo.price2,
+      price3: wo.price3,
       transportCost: transport,
-      total,
+      total: Number(wo.total) || 0,
       logoSrc: printAssetUrl(typeof logo === 'string' ? logo : String(logo)),
     });
     printHtmlDocument(html);
