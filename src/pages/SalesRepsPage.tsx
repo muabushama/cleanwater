@@ -517,7 +517,7 @@ export default function SalesRepsPage({ isAdmin }: { isAdmin?: boolean }) {
 
         <TabsContent value="customer-service" className="space-y-4">
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            <p className="text-sm text-muted-foreground">حسابات خدمة العملاء — العملاء، الفواتير، الزيارات، أوامر العمل</p>
+            <p className="text-sm text-muted-foreground">حسابات خدمة العملاء — العملاء، الزيارات، أوامر العمل</p>
             {isAdmin && (
               <Button className="gap-2" onClick={() => setAddCsOpen(true)}>
                 <Headset className="h-4 w-4" /> إضافة خدمة عملاء

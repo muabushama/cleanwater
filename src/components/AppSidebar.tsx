@@ -60,7 +60,6 @@ const customerServiceItems = [
   { title: 'لوحة خدمة العملاء', url: '/', icon: Headset },
   { title: 'متابعة العملاء', url: '/customer-service/follow-ups', icon: ListChecks },
   { title: 'العملاء', url: '/customers', icon: Users },
-  { title: 'الفواتير', url: '/invoices', icon: FileText },
   { title: 'الزيارات', url: '/visits', icon: CalendarCheck },
   { title: 'أوامر العمل', url: '/work-orders', icon: ClipboardList },
 ];

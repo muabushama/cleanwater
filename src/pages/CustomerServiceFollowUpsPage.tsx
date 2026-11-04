@@ -1,23 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Phone, Wrench, ClipboardList } from 'lucide-react';
+import { Wrench, ClipboardList } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { useUserBranch } from '@/hooks/useUserBranch';
 import { branchDbValuesForUiBranch } from '@/lib/branchFilters';
-import { formatEGP } from '@/data/demo-data';
-import { invoiceCustomerCredit, invoiceDebtRemaining } from '@/lib/invoiceBalance';
 
 const formatDateDisplay = (v: any) => { const s = String(v || ''); const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}-${m[2]}-${m[1]}` : s; };
 
-type Invoice = { id: string; customer_name: string; amount: number; paid: number; remaining: number; status: string; date: string };
 type Maintenance = { id: string; customer_name: string; next_date: string; type: string; status: string };
 type WorkOrder = { id: string; customer_name: string; order_code: string; visit_date: string; status: string };
 
 export default function CustomerServiceFollowUpsPage() {
   const { branch } = useUserBranch();
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [maintenance, setMaintenance] = useState<Maintenance[]>([]);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,13 +22,11 @@ export default function CustomerServiceFollowUpsPage() {
     const fetchData = async () => {
       setLoading(true);
       const bv = branchDbValuesForUiBranch(branch);
-      const [invoicesRes, maintenanceRes, workOrdersRes] = await Promise.all([
-        supabase.from('invoices').select('*').in('branch', bv).order('created_at', { ascending: false }).limit(50),
+      const [maintenanceRes, workOrdersRes] = await Promise.all([
         supabase.from('maintenance').select('*').in('branch', bv).order('next_date', { ascending: true }).limit(50),
         supabase.from('work_orders').select('*').in('branch', bv).order('created_at', { ascending: false }).limit(50),
       ]);
 
-      setInvoices((invoicesRes.data || []) as Invoice[]);
       setMaintenance((maintenanceRes.data || []) as Maintenance[]);
       setWorkOrders((workOrdersRes.data || []) as WorkOrder[]);
       setLoading(false);
@@ -40,11 +34,6 @@ export default function CustomerServiceFollowUpsPage() {
 
     fetchData();
   }, [branch]);
-
-  const pendingInvoices = useMemo(
-    () => invoices.filter(item => item.status !== 'paid' && item.status !== 'deleted'),
-    [invoices],
-  );
 
   const pendingMaintenance = useMemo(
     () => maintenance.filter(item => item.status !== 'completed'),
@@ -66,33 +55,7 @@ export default function CustomerServiceFollowUpsPage() {
       {loading ? (
         <p className="text-muted-foreground text-center py-10">جاري التحميل...</p>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
-          <Card className="card-shadow">
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Phone className="h-4 w-4" /> تحصيل ومتابعة الفواتير
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {pendingInvoices.length === 0 ? <p className="text-sm text-muted-foreground">لا توجد فواتير معلقة</p> : pendingInvoices.slice(0, 10).map((invoice) => (
-                <div key={invoice.id} className="rounded-lg bg-muted/40 p-3">
-                  <div className="flex items-center justify-between">
-                    <p className="font-medium text-sm">{invoice.customer_name}</p>
-                    <Badge variant={invoice.status === 'partial' ? 'secondary' : 'outline'}>{invoice.status}</Badge>
-                  </div>
-                  <div className="mt-2 text-xs text-muted-foreground flex items-center justify-between">
-                    <span>{formatDateDisplay(invoice.date)}</span>
-                    <span className={invoiceCustomerCredit(invoice.amount, invoice.paid) > 0 ? 'text-emerald-700 font-medium' : ''}>
-                      {invoiceCustomerCredit(invoice.amount, invoice.paid) > 0
-                        ? `رصيد ${formatEGP(invoiceCustomerCredit(invoice.amount, invoice.paid))}`
-                        : `متبقي ${formatEGP(invoiceDebtRemaining(invoice.amount, invoice.paid))}`}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
           <Card className="card-shadow">
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">

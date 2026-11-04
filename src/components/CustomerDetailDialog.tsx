@@ -14,6 +14,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
 import { useUserBranch } from '@/hooks/useUserBranch';
+import { useAuth } from '@/hooks/useAuth';
 import { branchDbValuesForUiBranch } from '@/lib/branchFilters';
 import { useNavigate } from 'react-router-dom';
 import { invoiceCustomerCredit, invoiceDebtRemaining } from '@/lib/invoiceBalance';
@@ -2086,6 +2087,8 @@ function DeviceDetailCard({
 // ===== Main Dialog =====
 export function CustomerDetailDialog({ customer, open, onOpenChange }: CustomerDetailDialogProps) {
   const { branch } = useUserBranch();
+  const { isCustomerService, isAdmin } = useAuth();
+  const hideInvoices = isCustomerService && !isAdmin;
   const navigate = useNavigate();
   const [invoices, setInvoices] = useState<any[]>([]);
   const [workOrders, setWorkOrders] = useState<any[]>([]);
@@ -2112,12 +2115,14 @@ export function CustomerDetailDialog({ customer, open, onOpenChange }: CustomerD
     setLoading(true);
     const bVals = branchDbValuesForUiBranch(branch);
     const [invRes, woRes, maintRes, devRes] = await Promise.all([
-      supabase.from('invoices').select('*').eq('customer_name', queryName).in('branch', bVals).order('date', { ascending: false }),
+      hideInvoices
+        ? Promise.resolve({ data: [] as any[] })
+        : supabase.from('invoices').select('*').eq('customer_name', queryName).in('branch', bVals).order('date', { ascending: false }),
       supabase.from('work_orders').select('*').eq('customer_name', queryName).in('branch', bVals).order('created_at', { ascending: false }),
       supabase.from('maintenance').select('*').eq('customer_name', queryName).in('branch', bVals).order('next_date', { ascending: false }),
       (supabase as any).from('customer_devices').select('*').eq('customer_id', customer.id).in('branch', bVals).order('created_at', { ascending: false }),
     ]);
-    setInvoices(invRes.data || []);
+    setInvoices(hideInvoices ? [] : (invRes.data || []));
     setWorkOrders(woRes.data || []);
     setMaintenance(maintRes.data || []);
     setDevices((devRes.data || []) as any[]);
@@ -2177,13 +2182,15 @@ export function CustomerDetailDialog({ customer, open, onOpenChange }: CustomerD
 
         {/* Tabs */}
         <Tabs defaultValue="devices" className="mt-2">
-          <TabsList className="w-full grid grid-cols-4">
+          <TabsList className={`w-full grid ${hideInvoices ? 'grid-cols-3' : 'grid-cols-4'}`}>
             <TabsTrigger value="devices" className="gap-1 text-xs">
               <Monitor className="h-3.5 w-3.5" /> الأجهزة ({devices.length})
             </TabsTrigger>
+            {!hideInvoices && (
             <TabsTrigger value="invoices" className="gap-1 text-xs">
               <FileText className="h-3.5 w-3.5" /> الفواتير ({invoices.length})
             </TabsTrigger>
+            )}
             <TabsTrigger value="work-orders" className="gap-1 text-xs">
               <ClipboardList className="h-3.5 w-3.5" /> أوامر العمل ({workOrders.length})
             </TabsTrigger>
@@ -2231,8 +2238,8 @@ export function CustomerDetailDialog({ customer, open, onOpenChange }: CustomerD
                 ))}
               </TabsContent>
 
-              {/* Invoices Tab */}
-              <TabsContent value="invoices" className="space-y-2 mt-3">
+              {/* Invoices Tab — hidden for customer service accounts */}
+              {!hideInvoices && <TabsContent value="invoices" className="space-y-2 mt-3">
                 {invoices.length === 0 ? (
                   <p className="text-sm text-muted-foreground text-center py-4">لا توجد فواتير</p>
                 ) : invoices.map(inv => (
@@ -2258,7 +2265,7 @@ export function CustomerDetailDialog({ customer, open, onOpenChange }: CustomerD
                     </CardContent>
                   </Card>
                 ))}
-              </TabsContent>
+              </TabsContent>}
 
               {/* Work Orders Tab */}
               <TabsContent value="work-orders" className="space-y-2 mt-3">

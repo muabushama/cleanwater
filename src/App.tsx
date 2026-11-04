@@ -74,7 +74,7 @@ function AppRoutes() {
           <Route path="/" element={<CustomerServiceDashboardPage />} />
           <Route path="/customer-service/follow-ups" element={<CustomerServiceFollowUpsPage />} />
           <Route path="/customers" element={<CustomersPage />} />
-          <Route path="/invoices" element={<InvoicesPage />} />
+          <Route path="/invoices" element={<Navigate to="/" replace />} />
           <Route path="/maintenance" element={<VisitsHubPage />} />
           <Route path="/work-orders" element={<VisitsHubPage />} />
           <Route path="/visits" element={<VisitsHubPage />} />
