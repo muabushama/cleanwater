@@ -18,18 +18,19 @@ export function useAuth() {
       setUser(nextSession?.user ?? null);
 
       if (nextSession?.user) {
-        const [profileRes, adminRes, repRes, csRes, wkRes] = await Promise.all([
+        const [profileRes, rolesRes] = await Promise.all([
           supabase.from('profiles').select('full_name, branch_id').eq('id', nextSession.user.id).single(),
-          supabase.from('user_roles').select('role').eq('user_id', nextSession.user.id).eq('role', 'admin').maybeSingle(),
-          supabase.from('user_roles').select('role').eq('user_id', nextSession.user.id).eq('role', 'sales_rep').maybeSingle(),
-          supabase.from('user_roles').select('role').eq('user_id', nextSession.user.id).eq('role', 'customer_service').maybeSingle(),
-          supabase.from('user_roles').select('role').eq('user_id', nextSession.user.id).eq('role', 'warehouse_keeper').maybeSingle(),
+          supabase.from('user_roles').select('role').eq('user_id', nextSession.user.id),
         ]);
         if (profileRes.data) setProfile(profileRes.data);
-        setIsAdmin(!!adminRes.data);
-        setIsRep(!!repRes.data);
-        setIsCustomerService(!!csRes.data);
-        setIsWarehouseKeeper(!!wkRes.data);
+        const queried = Array.isArray(rolesRes.data)
+          ? rolesRes.data.map((row: { role?: string }) => String(row.role || ''))
+          : [];
+        const roles = queried.length > 0 ? queried : (nextSession.user.roles || []);
+        setIsAdmin(roles.includes('admin'));
+        setIsRep(roles.includes('sales_rep'));
+        setIsCustomerService(roles.includes('customer_service'));
+        setIsWarehouseKeeper(roles.includes('warehouse_keeper'));
       } else {
         setProfile(null);
         setIsAdmin(false);

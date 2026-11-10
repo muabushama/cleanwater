@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import { useState, useEffect, useRef } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate, Navigate } from 'react-router-dom';
+import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { formatEGP, companyInfo } from '@/data/demo-data';
 import { Card, CardContent } from '@/components/ui/card';
@@ -364,6 +365,7 @@ function PrintableInvoice({
 }
 
 export default function InvoicesPage() {
+  const { isCustomerService, isAdmin } = useAuth();
   const [search, setSearch] = useState('');
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -1060,6 +1062,10 @@ export default function InvoicesPage() {
   const totalPaid = activeInvoices.reduce((s, i) => s + (Number(i.paid) || 0), 0);
   const totalRemaining = activeInvoices.reduce((s, i) => s + invoiceDebtRemaining(i.amount, i.paid), 0);
   const totalCustomerCredit = activeInvoices.reduce((s, i) => s + invoiceCustomerCredit(i.amount, i.paid), 0);
+
+  if (isCustomerService && !isAdmin) {
+    return <Navigate to="/" replace />;
+  }
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">

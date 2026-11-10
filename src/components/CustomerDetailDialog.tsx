@@ -2087,8 +2087,8 @@ function DeviceDetailCard({
 // ===== Main Dialog =====
 export function CustomerDetailDialog({ customer, open, onOpenChange }: CustomerDetailDialogProps) {
   const { branch } = useUserBranch();
-  const { isCustomerService, isAdmin } = useAuth();
-  const hideInvoices = isCustomerService && !isAdmin;
+  const { isCustomerService, isAdmin, loading: authLoading } = useAuth();
+  const hideInvoices = authLoading || (isCustomerService && !isAdmin);
   const navigate = useNavigate();
   const [invoices, setInvoices] = useState<any[]>([]);
   const [workOrders, setWorkOrders] = useState<any[]>([]);

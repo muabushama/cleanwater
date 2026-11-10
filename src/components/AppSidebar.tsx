@@ -21,6 +21,7 @@ import {
   Factory,
 } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
+import { useAuth } from '@/hooks/useAuth';
 import { NavLink } from '@/components/NavLink';
 import {
   Sidebar,
@@ -71,6 +72,8 @@ interface AppSidebarProps {
 }
 
 export function AppSidebar({ isAdmin, isCustomerService, isWarehouseKeeper }: AppSidebarProps) {
+  const { isCustomerService: authIsCustomerService, isAdmin: authIsAdmin } = useAuth();
+  const hideInvoices = (isCustomerService || authIsCustomerService) && !(isAdmin || authIsAdmin);
   const { state } = useSidebar();
   const collapsed = state === 'collapsed';
   const location = useLocation();
@@ -85,8 +88,8 @@ export function AppSidebar({ isAdmin, isCustomerService, isWarehouseKeeper }: Ap
     ? managementItems.filter(m => m.url !== '/finance')
     : managementItems;
 
-  const primaryItems = isCustomerService ? customerServiceItems : mainItems;
-  const secondaryItems = isCustomerService ? [] : [...managementItemsFiltered, ...adminItems];
+  const primaryItems = hideInvoices ? customerServiceItems : mainItems;
+  const secondaryItems = hideInvoices ? [] : [...managementItemsFiltered, ...adminItems];
 
   return (
     <Sidebar side="right" collapsible="icon" className="border-r-0 gradient-sidebar">

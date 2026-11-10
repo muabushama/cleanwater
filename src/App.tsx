@@ -67,7 +67,7 @@ function AppRoutes() {
     );
   }
 
-  if (isCustomerService && !isAdmin && !isWarehouseKeeper) {
+  if (isCustomerService && !isAdmin) {
     return (
       <Routes>
         <Route element={<DashboardLayout isAdmin={false} isCustomerService={true} profile={profile} onSignOut={signOut} />}>

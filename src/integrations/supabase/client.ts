@@ -8,6 +8,7 @@ type RuntimeAppConfig = {
 type AuthUser = {
   id: string;
   email: string;
+  roles?: string[];
 };
 
 type AuthSession = {
@@ -291,7 +292,7 @@ const auth = {
 
     currentSession = {
       access_token: currentSession.access_token,
-      user: { id: me.data.user.id, email: me.data.user.email },
+      user: { id: me.data.user.id, email: me.data.user.email, roles: me.data.user.roles || [] },
     };
     writeStoredSession(currentSession);
 
@@ -322,7 +323,7 @@ const auth = {
 
     const session = {
       access_token: result.data.token,
-      user: { id: result.data.user.id, email: result.data.user.email },
+      user: { id: result.data.user.id, email: result.data.user.email, roles: result.data.user.roles || [] },
     };
 
     emitAuth('SIGNED_IN', session);
@@ -356,7 +357,7 @@ const auth = {
 
     const session = {
       access_token: result.data.token,
-      user: { id: result.data.user.id, email: result.data.user.email },
+      user: { id: result.data.user.id, email: result.data.user.email, roles: result.data.user.roles || [] },
     };
 
     emitAuth('SIGNED_IN', session);
